@@ -27,7 +27,7 @@ public class AccountController {
     private Long parse(String accountId) {
         try {
             return Long.parseLong(accountId);
-        }  catch (NumberFormatException ex) {
+        } catch (NumberFormatException ex) {
             throw new LedgerServiceException(ErrorClassification.ACCOUNT_ID_PARSE_ERROR);
         }
     }

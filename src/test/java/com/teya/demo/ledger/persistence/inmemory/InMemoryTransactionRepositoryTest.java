@@ -1,9 +1,10 @@
 package com.teya.demo.ledger.persistence.inmemory;
 
+import com.teya.demo.ledger.model.Money;
 import com.teya.demo.ledger.model.Transaction;
 import org.junit.jupiter.api.Test;
 
-import java.math.BigDecimal;
+import java.util.Currency;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -17,11 +18,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class InMemoryTransactionRepositoryTest {
 
+    private static final Currency EUR = Currency.getInstance("EUR");
+
     private final InMemoryTransactionRepository repository = new InMemoryTransactionRepository();
 
     @Test
     void saveAssignsTransactionIdAndCreatedAt() {
-        Transaction transaction = new Transaction(1L, new BigDecimal("10.00"), new BigDecimal("10.00"));
+        Transaction transaction = new Transaction(1L, eur(1000), eur(1000));
 
         Transaction saved = repository.save(transaction);
 
@@ -31,7 +34,7 @@ class InMemoryTransactionRepositoryTest {
 
     @Test
     void returnedTransactionsAreCopiesAndDoNotAffectStoredState() {
-        Transaction saved = repository.save(new Transaction(1L, new BigDecimal("10.00"), new BigDecimal("10.00")));
+        Transaction saved = repository.save(new Transaction(1L, eur(1000), eur(1000)));
 
         saved.setTransactionId(UUID.randomUUID());
         repository.findAll(1L).get(0).setTransactionId(UUID.randomUUID());
@@ -47,8 +50,8 @@ class InMemoryTransactionRepositoryTest {
 
     @Test
     void findAllIsolatesTransactionsPerAccount() {
-        repository.save(new Transaction(1L, new BigDecimal("10.00"), new BigDecimal("10.00")));
-        repository.save(new Transaction(2L, new BigDecimal("500.00"), new BigDecimal("500.00")));
+        repository.save(new Transaction(1L, eur(1000), eur(1000)));
+        repository.save(new Transaction(2L, eur(50000), eur(50000)));
 
         List<Transaction> account1History = repository.findAll(1L);
 
@@ -58,9 +61,9 @@ class InMemoryTransactionRepositoryTest {
 
     @Test
     void findAllReturnsNewestFirst() {
-        Transaction first = repository.save(new Transaction(1L, new BigDecimal("10.00"), new BigDecimal("10.00")));
-        Transaction second = repository.save(new Transaction(1L, new BigDecimal("20.00"), new BigDecimal("30.00")));
-        Transaction third = repository.save(new Transaction(1L, new BigDecimal("30.00"), new BigDecimal("60.00")));
+        Transaction first = repository.save(new Transaction(1L, eur(1000), eur(1000)));
+        Transaction second = repository.save(new Transaction(1L, eur(2000), eur(3000)));
+        Transaction third = repository.save(new Transaction(1L, eur(3000), eur(6000)));
 
         List<Transaction> history = repository.findAll(1L);
 
@@ -84,7 +87,7 @@ class InMemoryTransactionRepositoryTest {
                 } catch (InterruptedException ex) {
                     Thread.currentThread().interrupt();
                 }
-                Transaction saved = repository.save(new Transaction(1L, BigDecimal.ONE, BigDecimal.ONE));
+                Transaction saved = repository.save(new Transaction(1L, eur(1), eur(1)));
                 savedIds.add(saved.getTransactionId());
             });
         }
@@ -96,5 +99,9 @@ class InMemoryTransactionRepositoryTest {
 
         assertThat(repository.findAll(1L)).hasSize(threads);
         assertThat(savedIds).hasSize(threads);
+    }
+
+    private static Money eur(long cents) {
+        return new Money(cents, EUR);
     }
 }

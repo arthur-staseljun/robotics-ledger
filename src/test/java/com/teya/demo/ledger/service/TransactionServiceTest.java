@@ -3,7 +3,7 @@ package com.teya.demo.ledger.service;
 import com.teya.demo.ledger.exception.classification.ErrorClassification;
 import com.teya.demo.ledger.exception.classification.LedgerServiceException;
 import com.teya.demo.ledger.model.Account;
-import com.teya.demo.ledger.model.Currency;
+import com.teya.demo.ledger.model.Money;
 import com.teya.demo.ledger.model.Transaction;
 import com.teya.demo.ledger.persistence.AccountRepository;
 import com.teya.demo.ledger.persistence.TransactionRepository;
@@ -13,7 +13,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.math.BigDecimal;
+import java.util.Currency;
 import java.util.List;
 import java.util.Optional;
 
@@ -27,6 +27,9 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class TransactionServiceTest {
+
+    private static final Currency EUR = Currency.getInstance("EUR");
+    private static final Currency USD = Currency.getInstance("USD");
 
     @Mock
     private TransactionRepository transactionRepository;
@@ -45,32 +48,32 @@ class TransactionServiceTest {
     void depositIncreasesBalanceAndIsRecordedAsDeposit() {
         Account account = new Account(1L);
         when(accountRepository.findById(1L)).thenReturn(Optional.of(account));
-        when(accountRepository.applyBalanceChange(1L, new BigDecimal("100.00"))).thenReturn(Optional.of(new BigDecimal("100.00")));
+        when(accountRepository.applyBalanceChange(1L, eur(10000))).thenReturn(Optional.of(eur(10000)));
         when(transactionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
-        Transaction result = transactionService.createTransaction(1L, new BigDecimal("100.00"), Currency.EUR);
+        Transaction result = transactionService.createTransaction(1L, eur(10000));
 
         assertThat(result.getTransactionType()).isEqualTo(Transaction.TransactionType.DEPOSIT);
-        assertThat(result.getBalanceAfter()).isEqualByComparingTo("100.00");
-        verify(accountRepository).applyBalanceChange(1L, new BigDecimal("100.00"));
+        assertThat(result.getBalanceAfter()).isEqualTo(eur(10000));
+        verify(accountRepository).applyBalanceChange(1L, eur(10000));
     }
 
     @Test
     void withdrawalDecreasesBalanceAndIsRecordedAsWithdrawal() {
         Account account = new Account(1L);
         when(accountRepository.findById(1L)).thenReturn(Optional.of(account));
-        when(accountRepository.applyBalanceChange(1L, new BigDecimal("-30.00"))).thenReturn(Optional.of(new BigDecimal("70.00")));
+        when(accountRepository.applyBalanceChange(1L, eur(-3000))).thenReturn(Optional.of(eur(7000)));
         when(transactionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
-        Transaction result = transactionService.createTransaction(1L, new BigDecimal("-30.00"), Currency.EUR);
+        Transaction result = transactionService.createTransaction(1L, eur(-3000));
 
         assertThat(result.getTransactionType()).isEqualTo(Transaction.TransactionType.WITHDRAWAL);
-        assertThat(result.getBalanceAfter()).isEqualByComparingTo("70.00");
+        assertThat(result.getBalanceAfter()).isEqualTo(eur(7000));
     }
 
     @Test
     void zeroAmountIsRejectedBeforeTouchingTheAccount() {
-        assertThatThrownBy(() -> transactionService.createTransaction(1L, BigDecimal.ZERO, Currency.EUR))
+        assertThatThrownBy(() -> transactionService.createTransaction(1L, eur(0)))
                 .isInstanceOf(LedgerServiceException.class)
                 .extracting("errorClassification")
                 .isEqualTo(ErrorClassification.AMOUNT_PARSE_ERROR);
@@ -82,7 +85,7 @@ class TransactionServiceTest {
     void accountDoesNotExistIsRejected() {
         when(accountRepository.findById(99L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> transactionService.createTransaction(99L, new BigDecimal("10.00"), Currency.EUR))
+        assertThatThrownBy(() -> transactionService.createTransaction(99L, eur(1000)))
                 .isInstanceOf(LedgerServiceException.class)
                 .extracting("errorClassification")
                 .isEqualTo(ErrorClassification.ACCOUNT_DOES_NOT_EXIST);
@@ -95,7 +98,7 @@ class TransactionServiceTest {
         Account account = new Account(1L);
         when(accountRepository.findById(1L)).thenReturn(Optional.of(account));
 
-        assertThatThrownBy(() -> transactionService.createTransaction(1L, new BigDecimal("10.00"), null))
+        assertThatThrownBy(() -> transactionService.createTransaction(1L, new Money(1000, USD)))
                 .isInstanceOf(LedgerServiceException.class)
                 .extracting("errorClassification")
                 .isEqualTo(ErrorClassification.CURRENCY_MISMATCH);
@@ -110,7 +113,7 @@ class TransactionServiceTest {
         when(accountRepository.applyBalanceChange(eq(1L), any()))
                 .thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> transactionService.createTransaction(1L, new BigDecimal("-1000.00"), Currency.EUR))
+        assertThatThrownBy(() -> transactionService.createTransaction(1L, eur(-100000)))
                 .isInstanceOf(LedgerServiceException.class)
                 .extracting("errorClassification")
                 .isEqualTo(ErrorClassification.INSUFFICIENT_FUNDS);
@@ -134,11 +137,15 @@ class TransactionServiceTest {
     void getAllTransactionsDelegatesToRepositoryWhenAccountExists() {
         Account account = new Account(1L);
         when(accountRepository.findById(1L)).thenReturn(Optional.of(account));
-        List<Transaction> history = List.of(new Transaction(1L, new BigDecimal("10.00"), new BigDecimal("10.00")));
+        List<Transaction> history = List.of(new Transaction(1L, eur(1000), eur(1000)));
         when(transactionRepository.findAll(1L)).thenReturn(history);
 
         List<Transaction> result = transactionService.getAllTransactions(1L);
 
         assertThat(result).isEqualTo(history);
+    }
+
+    private static Money eur(long cents) {
+        return new Money(cents, EUR);
     }
 }

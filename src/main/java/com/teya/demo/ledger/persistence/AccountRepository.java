@@ -1,8 +1,8 @@
 package com.teya.demo.ledger.persistence;
 
 import com.teya.demo.ledger.model.Account;
+import com.teya.demo.ledger.model.Money;
 
-import java.math.BigDecimal;
 import java.util.Optional;
 
 public interface AccountRepository {
@@ -11,5 +11,5 @@ public interface AccountRepository {
 
     Optional<Account> findById(Long id);
 
-    Optional<BigDecimal> applyBalanceChange(Long accountId, BigDecimal amount);
+    Optional<Money> applyBalanceChange(Long accountId, Money amount);
 }

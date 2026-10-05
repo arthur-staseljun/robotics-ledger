@@ -1,9 +1,10 @@
 package com.teya.demo.ledger.persistence.inmemory;
 
 import com.teya.demo.ledger.model.Account;
+import com.teya.demo.ledger.model.Money;
 import org.junit.jupiter.api.Test;
 
-import java.math.BigDecimal;
+import java.util.Currency;
 import java.util.Set;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
@@ -12,6 +13,8 @@ import java.util.stream.IntStream;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class InMemoryAccountRepositoryTest {
+
+    private static final Currency EUR = Currency.getInstance("EUR");
 
     private final InMemoryAccountRepository repository = new InMemoryAccountRepository();
 
@@ -35,10 +38,10 @@ class InMemoryAccountRepositoryTest {
     void returnedAccountsAreCopiesAndDoNotAffectStoredState() {
         Account saved = repository.save(new Account());
 
-        saved.setBalance(new BigDecimal("999.00"));
-        repository.findById(saved.getId()).orElseThrow().setBalance(new BigDecimal("999.00"));
+        saved.setBalance(eur(99900));
+        repository.findById(saved.getId()).orElseThrow().setBalance(eur(99900));
 
-        assertThat(repository.findById(saved.getId()).orElseThrow().getBalance()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(repository.findById(saved.getId()).orElseThrow().getBalance()).isEqualTo(eur(0));
     }
 
     @Test
@@ -50,9 +53,9 @@ class InMemoryAccountRepositoryTest {
     void applyBalanceChangeAddsDeposit() {
         Account account = repository.save(new Account());
 
-        BigDecimal newBalance = repository.applyBalanceChange(account.getId(), new BigDecimal("100.00")).orElseThrow();
+        Money newBalance = repository.applyBalanceChange(account.getId(), eur(10000)).orElseThrow();
 
-        assertThat(newBalance).isEqualByComparingTo("100.00");
+        assertThat(newBalance).isEqualTo(eur(10000));
         assertThat(repository.findById(account.getId())).get().extracting(Account::getBalance)
                 .isEqualTo(newBalance);
     }
@@ -60,26 +63,26 @@ class InMemoryAccountRepositoryTest {
     @Test
     void applyBalanceChangeSubtractsWithdrawal() {
         Account account = repository.save(new Account());
-        repository.applyBalanceChange(account.getId(), new BigDecimal("100.00"));
+        repository.applyBalanceChange(account.getId(), eur(10000));
 
-        BigDecimal newBalance = repository.applyBalanceChange(account.getId(), new BigDecimal("-30.00")).orElseThrow();
+        Money newBalance = repository.applyBalanceChange(account.getId(), eur(-3000)).orElseThrow();
 
-        assertThat(newBalance).isEqualByComparingTo("70.00");
+        assertThat(newBalance).isEqualTo(eur(7000));
     }
 
     @Test
     void applyBalanceChangeRejectsOverdraft() {
         Account account = repository.save(new Account());
 
-        assertThat(repository.applyBalanceChange(account.getId(), new BigDecimal("-1.00"))).isEmpty();
+        assertThat(repository.applyBalanceChange(account.getId(), eur(-100))).isEmpty();
 
-        BigDecimal balanceAfterRejectedAttempt = repository.findById(account.getId()).orElseThrow().getBalance();
-        assertThat(balanceAfterRejectedAttempt).isEqualByComparingTo(BigDecimal.ZERO);
+        Money balanceAfterRejectedAttempt = repository.findById(account.getId()).orElseThrow().getBalance();
+        assertThat(balanceAfterRejectedAttempt).isEqualTo(eur(0));
     }
 
     @Test
     void applyBalanceChangeReturnsEmptyWhenAccountDoesNotExist() {
-        assertThat(repository.applyBalanceChange(404L, BigDecimal.ONE)).isEmpty();
+        assertThat(repository.applyBalanceChange(404L, eur(1))).isEmpty();
     }
 
     @Test
@@ -90,7 +93,7 @@ class InMemoryAccountRepositoryTest {
         ExecutorService pool = Executors.newFixedThreadPool(threads);
         CountDownLatch ready = new CountDownLatch(threads);
         CountDownLatch start = new CountDownLatch(1);
-        Set<BigDecimal> observedBalancesAfterEachCall = ConcurrentHashMap.newKeySet();
+        Set<Money> observedBalancesAfterEachCall = ConcurrentHashMap.newKeySet();
 
         for (int i = 0; i < threads; i++) {
             pool.submit(() -> {
@@ -100,7 +103,7 @@ class InMemoryAccountRepositoryTest {
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
-                observedBalancesAfterEachCall.add(repository.applyBalanceChange(account.getId(), BigDecimal.ONE).orElseThrow().setScale(0));
+                observedBalancesAfterEachCall.add(repository.applyBalanceChange(account.getId(), eur(1)).orElseThrow());
             });
         }
 
@@ -109,12 +112,16 @@ class InMemoryAccountRepositoryTest {
         pool.shutdown();
         assertThat(pool.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
 
-        BigDecimal finalBalance = repository.findById(account.getId()).orElseThrow().getBalance();
-        assertThat(finalBalance).isEqualByComparingTo(BigDecimal.valueOf(threads));
+        Money finalBalance = repository.findById(account.getId()).orElseThrow().getBalance();
+        assertThat(finalBalance).isEqualTo(eur(threads));
 
-        Set<BigDecimal> everyRunningBalanceFromOneToThreads = IntStream.rangeClosed(1, threads)
-                .mapToObj(BigDecimal::valueOf)
+        Set<Money> everyRunningBalanceFromOneToThreads = IntStream.rangeClosed(1, threads)
+                .mapToObj(InMemoryAccountRepositoryTest::eur)
                 .collect(Collectors.toSet());
         assertThat(observedBalancesAfterEachCall).isEqualTo(everyRunningBalanceFromOneToThreads);
+    }
+
+    private static Money eur(long cents) {
+        return new Money(cents, EUR);
     }
 }

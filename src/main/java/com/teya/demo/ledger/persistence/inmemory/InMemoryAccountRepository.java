@@ -1,10 +1,10 @@
 package com.teya.demo.ledger.persistence.inmemory;
 
 import com.teya.demo.ledger.model.Account;
+import com.teya.demo.ledger.model.Money;
 import com.teya.demo.ledger.persistence.AccountRepository;
 import org.springframework.stereotype.Repository;
 
-import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -34,11 +34,11 @@ public class InMemoryAccountRepository implements AccountRepository {
     }
 
     @Override
-    public Optional<BigDecimal> applyBalanceChange(Long accountId, BigDecimal amount) {
-        AtomicReference<BigDecimal> newBalanceRef = new AtomicReference<>();
+    public Optional<Money> applyBalanceChange(Long accountId, Money amount) {
+        AtomicReference<Money> newBalanceRef = new AtomicReference<>();
         store.computeIfPresent(accountId, (id, account) -> {
-            BigDecimal newBalance = account.getBalance().add(amount);
-            if (newBalance.compareTo(BigDecimal.ZERO) < 0) {
+            Money newBalance = account.getBalance().plus(amount);
+            if (newBalance.isNegative()) {
                 return account;
             }
             account.setBalance(newBalance);
@@ -48,5 +48,4 @@ public class InMemoryAccountRepository implements AccountRepository {
         });
         return Optional.ofNullable(newBalanceRef.get());
     }
-
 }

@@ -3,7 +3,6 @@ package com.teya.demo.ledger.model;
 import lombok.Getter;
 import lombok.Setter;
 
-import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -13,8 +12,8 @@ public class Transaction {
     private UUID transactionId;
     private Long accountId;
     private TransactionType transactionType;
-    private BigDecimal amount;
-    private BigDecimal balanceAfter;
+    private Money amount;
+    private Money balanceAfter;
     @Setter
     private Instant createdAt;
 
@@ -23,9 +22,9 @@ public class Transaction {
         WITHDRAWAL
     }
 
-    public Transaction(Long accountId, BigDecimal amount, BigDecimal balanceAfter) {
+    public Transaction(Long accountId, Money amount, Money balanceAfter) {
         this.accountId = accountId;
-        this.transactionType = amount.compareTo(BigDecimal.ZERO) > 0 ? TransactionType.DEPOSIT : TransactionType.WITHDRAWAL;
+        this.transactionType = amount.isPositive() ? TransactionType.DEPOSIT : TransactionType.WITHDRAWAL;
         this.amount = amount;
         this.balanceAfter = balanceAfter;
     }

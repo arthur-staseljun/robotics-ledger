@@ -3,14 +3,13 @@ package com.teya.demo.ledger.service;
 import com.teya.demo.ledger.exception.classification.ErrorClassification;
 import com.teya.demo.ledger.exception.classification.LedgerServiceException;
 import com.teya.demo.ledger.model.Account;
-import com.teya.demo.ledger.model.Currency;
+import com.teya.demo.ledger.model.Money;
 import com.teya.demo.ledger.model.Transaction;
 import com.teya.demo.ledger.persistence.AccountRepository;
 import com.teya.demo.ledger.persistence.TransactionRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
-import java.math.BigDecimal;
 import java.util.List;
 
 @Service
@@ -20,17 +19,17 @@ public class TransactionService {
     private final TransactionRepository transactionRepository;
     private final AccountRepository accountRepository;
 
-    public Transaction createTransaction(Long accountId, BigDecimal amount, Currency currency) {
-        if (amount.compareTo(BigDecimal.ZERO) == 0) {
+    public Transaction createTransaction(Long accountId, Money money) {
+        if (money.amount() == 0) {
             throw new LedgerServiceException(ErrorClassification.AMOUNT_PARSE_ERROR);
         }
         Account account = getAccount(accountId);
-        if (!account.getCurrency().equals(currency)) {
+        if (!account.getBalance().currency().equals(money.currency())) {
             throw new LedgerServiceException(ErrorClassification.CURRENCY_MISMATCH);
         }
-        BigDecimal newBalance = accountRepository.applyBalanceChange(accountId, amount)
+        Money newBalance = accountRepository.applyBalanceChange(accountId, money)
                 .orElseThrow(() -> new LedgerServiceException(ErrorClassification.INSUFFICIENT_FUNDS));
-        return transactionRepository.save(new Transaction(accountId, amount, newBalance));
+        return transactionRepository.save(new Transaction(accountId, money, newBalance));
     }
 
     public List<Transaction> getAllTransactions(Long accountId) {

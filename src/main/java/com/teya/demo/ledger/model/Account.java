@@ -3,16 +3,17 @@ package com.teya.demo.ledger.model;
 import lombok.Getter;
 import lombok.Setter;
 
-import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Currency;
 
 @Getter
 public class Account {
+    private static final Currency DEFAULT_CURRENCY = Currency.getInstance("EUR");
+
     @Setter
     private Long id;
-    private Currency currency;
     @Setter
-    private BigDecimal balance;
+    private Money balance;
     private Instant createdAt;
     @Setter
     private Instant updatedAt;
@@ -23,18 +24,20 @@ public class Account {
 
     public Account(Long id) {
         this.id = id;
-        this.currency = Currency.EUR;
-        this.balance = BigDecimal.ZERO;
+        this.balance = Money.zero(DEFAULT_CURRENCY);
         this.createdAt = Instant.now();
         this.updatedAt = Instant.now();
     }
 
     private Account(Account other) {
         this.id = other.id;
-        this.currency = other.currency;
         this.balance = other.balance;
         this.createdAt = other.createdAt;
         this.updatedAt = other.updatedAt;
+    }
+
+    public Currency getCurrency() {
+        return balance.currency();
     }
 
     public Account copy() {
