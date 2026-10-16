@@ -9,11 +9,11 @@
 		<relativePath/>
 	</parent>
 
-	<groupId>com.teya.demo</groupId>
-	<artifactId>ledger</artifactId>
+	<groupId>com.robotics.demo</groupId>
+	<artifactId>robotics-ledger</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
-	<name>ledger</name>
-	<description>ledger</description>
+	<name>robotics-ledger</name>
+	<description>robotics-ledger</description>
 	<properties>
 		<java.version>25</java.version>
 	</properties>
