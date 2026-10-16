@@ -38,6 +38,15 @@ public class Transaction {
         this.createdAt = other.createdAt;
     }
 
+    public static Transaction of(UUID transactionId, Long accountId, TransactionType transactionType,
+                                  Money amount, Money balanceAfter, Instant createdAt) {
+        Transaction transaction = new Transaction(accountId, amount, balanceAfter);
+        transaction.transactionId = transactionId;
+        transaction.transactionType = transactionType;
+        transaction.createdAt = createdAt;
+        return transaction;
+    }
+
     public Transaction copy() {
         return new Transaction(this);
     }

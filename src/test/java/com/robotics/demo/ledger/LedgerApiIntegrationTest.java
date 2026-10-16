@@ -1,5 +1,6 @@
 package com.robotics.demo.ledger;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -18,9 +19,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+@Tag("container")
 @SpringBootTest
 @AutoConfigureMockMvc
-class LedgerApiIntegrationTest {
+class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final String TEST_CLIENT_ID = "test-client";
     private static final String HEADER_CLIENT_ID = "X-Client-Id";

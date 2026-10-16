@@ -5,22 +5,23 @@ import com.robotics.demo.ledger.exception.classification.LedgerServiceException;
 import com.robotics.demo.ledger.model.Account;
 import com.robotics.demo.ledger.model.Money;
 import com.robotics.demo.ledger.model.Transaction;
-import com.robotics.demo.ledger.persistence.AccountRepository;
-import com.robotics.demo.ledger.persistence.TransactionRepository;
+import com.robotics.demo.ledger.persistence.jpa.TransactionRepository;
+import com.robotics.demo.ledger.persistence.jpa.entity.TransactionEntity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Instant;
 import java.util.Currency;
 import java.util.List;
-import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -35,35 +36,42 @@ class TransactionServiceTest {
     private TransactionRepository transactionRepository;
 
     @Mock
-    private AccountRepository accountRepository;
+    private AccountService accountService;
 
     private TransactionService transactionService;
 
     @BeforeEach
     void setUp() {
-        transactionService = new TransactionService(transactionRepository, accountRepository);
+        transactionService = new TransactionService(transactionRepository, accountService);
+    }
+
+    private static Account accountWithBalance(long cents) {
+        Instant now = Instant.now();
+        return Account.of(1L, eur(cents), now, now);
+    }
+
+    private void givenEntriesAreStored() {
+        when(transactionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
     }
 
     @Test
     void depositIncreasesBalanceAndIsRecordedAsDeposit() {
-        Account account = new Account(1L);
-        when(accountRepository.findById(1L)).thenReturn(Optional.of(account));
-        when(accountRepository.applyBalanceChange(1L, eur(10000))).thenReturn(Optional.of(eur(10000)));
-        when(transactionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(accountService.getExistingAccountLocking(1L)).thenReturn(accountWithBalance(0));
+        givenEntriesAreStored();
 
         Transaction result = transactionService.createTransaction(1L, eur(10000));
 
         assertThat(result.getTransactionType()).isEqualTo(Transaction.TransactionType.DEPOSIT);
         assertThat(result.getBalanceAfter()).isEqualTo(eur(10000));
-        verify(accountRepository).applyBalanceChange(1L, eur(10000));
+        ArgumentCaptor<Account> saved = ArgumentCaptor.forClass(Account.class);
+        verify(accountService).save(saved.capture());
+        assertThat(saved.getValue().getBalance()).isEqualTo(eur(10000));
     }
 
     @Test
     void withdrawalDecreasesBalanceAndIsRecordedAsWithdrawal() {
-        Account account = new Account(1L);
-        when(accountRepository.findById(1L)).thenReturn(Optional.of(account));
-        when(accountRepository.applyBalanceChange(1L, eur(-3000))).thenReturn(Optional.of(eur(7000)));
-        when(transactionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(accountService.getExistingAccountLocking(1L)).thenReturn(accountWithBalance(10000));
+        givenEntriesAreStored();
 
         Transaction result = transactionService.createTransaction(1L, eur(-3000));
 
@@ -78,71 +86,80 @@ class TransactionServiceTest {
                 .extracting("errorClassification")
                 .isEqualTo(ErrorClassification.AMOUNT_PARSE_ERROR);
 
-        verify(accountRepository, never()).findById(any());
+        verify(accountService, never()).getExistingAccountLocking(any());
     }
 
     @Test
     void accountDoesNotExistIsRejected() {
-        when(accountRepository.findById(99L)).thenReturn(Optional.empty());
+        when(accountService.getExistingAccountLocking(99L))
+                .thenThrow(new LedgerServiceException(ErrorClassification.ACCOUNT_DOES_NOT_EXIST));
 
         assertThatThrownBy(() -> transactionService.createTransaction(99L, eur(1000)))
                 .isInstanceOf(LedgerServiceException.class)
                 .extracting("errorClassification")
                 .isEqualTo(ErrorClassification.ACCOUNT_DOES_NOT_EXIST);
 
-        verify(accountRepository, never()).applyBalanceChange(any(), any());
+        verify(accountService, never()).save(any());
+        verify(transactionRepository, never()).save(any());
     }
 
     @Test
-    void currencyMismatchIsRejected() {
-        Account account = new Account(1L);
-        when(accountRepository.findById(1L)).thenReturn(Optional.of(account));
+    void currencyMismatchIsRejectedAndNothingIsSaved() {
+        when(accountService.getExistingAccountLocking(1L)).thenReturn(accountWithBalance(0));
 
         assertThatThrownBy(() -> transactionService.createTransaction(1L, new Money(1000, USD)))
                 .isInstanceOf(LedgerServiceException.class)
                 .extracting("errorClassification")
                 .isEqualTo(ErrorClassification.CURRENCY_MISMATCH);
 
-        verify(accountRepository, never()).applyBalanceChange(any(), any());
+        verify(accountService, never()).save(any());
+        verify(transactionRepository, never()).save(any());
     }
 
     @Test
-    void insufficientFundsIsRaisedWhenRepositoryRejectsTheChange() {
-        Account account = new Account(1L);
-        when(accountRepository.findById(1L)).thenReturn(Optional.of(account));
-        when(accountRepository.applyBalanceChange(eq(1L), any()))
-                .thenReturn(Optional.empty());
+    void insufficientFundsIsRejectedAndNothingIsSaved() {
+        when(accountService.getExistingAccountLocking(1L)).thenReturn(accountWithBalance(500));
 
-        assertThatThrownBy(() -> transactionService.createTransaction(1L, eur(-100000)))
+        assertThatThrownBy(() -> transactionService.createTransaction(1L, eur(-501)))
                 .isInstanceOf(LedgerServiceException.class)
                 .extracting("errorClassification")
                 .isEqualTo(ErrorClassification.INSUFFICIENT_FUNDS);
 
+        verify(accountService, never()).save(any());
         verify(transactionRepository, never()).save(any());
     }
 
     @Test
     void getAllTransactionsChecksAccountExistsBeforeReturningHistory() {
-        when(accountRepository.findById(99L)).thenReturn(Optional.empty());
+        when(accountService.getExistingAccount(99L))
+                .thenThrow(new LedgerServiceException(ErrorClassification.ACCOUNT_DOES_NOT_EXIST));
 
         assertThatThrownBy(() -> transactionService.getAllTransactions(99L))
                 .isInstanceOf(LedgerServiceException.class)
                 .extracting("errorClassification")
                 .isEqualTo(ErrorClassification.ACCOUNT_DOES_NOT_EXIST);
 
-        verify(transactionRepository, never()).findAll(any());
+        verify(transactionRepository, never()).findByAccountIdOrderByCreatedAtDesc(any());
     }
 
     @Test
-    void getAllTransactionsDelegatesToRepositoryWhenAccountExists() {
-        Account account = new Account(1L);
-        when(accountRepository.findById(1L)).thenReturn(Optional.of(account));
-        List<Transaction> history = List.of(new Transaction(1L, eur(1000), eur(1000)));
-        when(transactionRepository.findAll(1L)).thenReturn(history);
+    void getAllTransactionsReturnsTheHistoryWhenAccountExists() {
+        when(accountService.getExistingAccount(1L)).thenReturn(accountWithBalance(0));
+        TransactionEntity entity = TransactionEntity.builder()
+                .id(UUID.randomUUID())
+                .accountId(1L)
+                .transactionType(Transaction.TransactionType.DEPOSIT)
+                .amount(1000)
+                .balanceAfter(1000)
+                .currency("EUR")
+                .createdAt(Instant.now())
+                .build();
+        when(transactionRepository.findByAccountIdOrderByCreatedAtDesc(1L)).thenReturn(List.of(entity));
 
         List<Transaction> result = transactionService.getAllTransactions(1L);
 
-        assertThat(result).isEqualTo(history);
+        assertThat(result).hasSize(1);
+        assertThat(result.getFirst().getAmount()).isEqualTo(eur(1000));
     }
 
     private static Money eur(long cents) {

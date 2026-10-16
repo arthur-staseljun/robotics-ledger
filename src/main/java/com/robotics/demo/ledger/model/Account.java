@@ -1,5 +1,7 @@
 package com.robotics.demo.ledger.model;
 
+import com.robotics.demo.ledger.exception.classification.ErrorClassification;
+import com.robotics.demo.ledger.exception.classification.LedgerServiceException;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -34,6 +36,26 @@ public class Account {
         this.balance = other.balance;
         this.createdAt = other.createdAt;
         this.updatedAt = other.updatedAt;
+    }
+
+    public static Account of(Long id, Money balance, Instant createdAt, Instant updatedAt) {
+        Account account = new Account(id);
+        account.balance = balance;
+        account.createdAt = createdAt;
+        account.updatedAt = updatedAt;
+        return account;
+    }
+
+    public void apply(Money change) {
+        if (!getCurrency().equals(change.currency())) {
+            throw new LedgerServiceException(ErrorClassification.CURRENCY_MISMATCH);
+        }
+        Money newBalance = balance.plus(change);
+        if (newBalance.isNegative()) {
+            throw new LedgerServiceException(ErrorClassification.INSUFFICIENT_FUNDS);
+        }
+        balance = newBalance;
+        updatedAt = Instant.now();
     }
 
     public Currency getCurrency() {
