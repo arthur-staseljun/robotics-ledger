@@ -7,8 +7,11 @@ import com.robotics.demo.ledger.model.Account;
 import com.robotics.demo.ledger.model.Money;
 import com.robotics.demo.ledger.model.Transaction;
 import com.robotics.demo.ledger.model.Transaction.TransactionType;
+import com.robotics.demo.ledger.model.Transfer;
+import com.robotics.demo.ledger.model.Transfer.TransferStatus;
 import com.robotics.demo.ledger.service.AccountService;
 import com.robotics.demo.ledger.service.TransactionService;
+import com.robotics.demo.ledger.service.TransferService;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,6 +20,7 @@ import org.springframework.transaction.IllegalTransactionStateException;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Currency;
 import java.util.List;
@@ -40,6 +44,9 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Autowired
     private TransactionService transactionService;
+
+    @Autowired
+    private TransferService transferService;
 
     @Autowired
     private TransactionTemplate transactionTemplate;
@@ -72,43 +79,35 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void unknownAccountIsRejectedOnLookupAndOnTransaction() {
+    void unknownAccountIsRejectedOnLookupAndByTheTransferService() {
         assertThatThrownBy(() -> accountService.getExistingAccount(-1L))
                 .isInstanceOf(LedgerServiceException.class)
                 .extracting("errorClassification")
                 .isEqualTo(ErrorClassification.ACCOUNT_DOES_NOT_EXIST);
-        assertThatThrownBy(() -> transactionService.createTransaction(-1L, eur("1.00")))
+        assertThatThrownBy(() -> transactionTemplate.executeWithoutResult(
+                status -> accountService.getExistingAccountLocking(-1L)))
+                .isInstanceOf(LedgerServiceException.class)
+                .extracting("errorClassification")
+                .isEqualTo(ErrorClassification.ACCOUNT_DOES_NOT_EXIST);
+        assertThatThrownBy(() -> transferService.createTransfer(newAccount().getId(), -1L, eur("1.00")))
                 .isInstanceOf(LedgerServiceException.class)
                 .extracting("errorClassification")
                 .isEqualTo(ErrorClassification.ACCOUNT_DOES_NOT_EXIST);
     }
 
     @Test
-    void appliesDepositAndWithdrawalAndRefusesOverdraft() {
-        Long id = newAccount().getId();
-
-        transactionService.createTransaction(id, eur("100.00"));
-        transactionService.createTransaction(id, eur("-30.00"));
-        assertThatThrownBy(() -> transactionService.createTransaction(id, eur("-70.01")))
-                .isInstanceOf(LedgerServiceException.class)
-                .extracting("errorClassification")
-                .isEqualTo(ErrorClassification.INSUFFICIENT_FUNDS);
-
-        assertThat(accountService.getExistingAccount(id).getBalance()).isEqualTo(eur("70.00"));
-    }
-
-    @Test
     void storesTransactionsNewestFirst() {
-        Long id = newAccount().getId();
-        transactionService.createTransaction(id, eur("10.00"));
-        transactionService.createTransaction(id, eur("-4.00"));
+        Long from = fundedAccount("10.00");
+        Long to = newAccount().getId();
+        transferService.createTransfer(from, to, eur("4.00"));
+        transferService.createTransfer(to, from, eur("1.50"));
 
-        List<Transaction> history = transactionService.getAllTransactions(id);
+        List<Transaction> history = transactionService.getAllTransactions(from);
 
         assertThat(history).extracting(Transaction::getTransactionType)
-                .containsExactly(TransactionType.WITHDRAWAL, TransactionType.DEPOSIT);
+                .containsExactly(TransactionType.DEPOSIT, TransactionType.WITHDRAWAL);
         assertThat(history).extracting(Transaction::getBalanceAfter)
-                .containsExactly(eur("6.00"), eur("10.00"));
+                .containsExactly(eur("7.50"), eur("6.00"));
     }
 
     @Test
@@ -127,39 +126,101 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void parallelWithdrawalsNeverOverdrawTheAccount() throws Exception {
-        Long id = newAccount().getId();
-        transactionService.createTransaction(id, eur("20.00"));
-        AtomicInteger insufficientFunds = new AtomicInteger();
+    void parallelTransfersIntoOneAccountAreAllCounted() throws Exception {
+        Long target = newAccount().getId();
+        Long source = fundedAccount("100.00");
 
-        int succeeded = runInParallel(50, () -> {
-            try {
-                transactionService.createTransaction(id, eur("-1.00"));
-                return true;
-            } catch (LedgerServiceException e) {
-                assertThat(e.getErrorClassification()).isEqualTo(ErrorClassification.INSUFFICIENT_FUNDS);
-                insufficientFunds.incrementAndGet();
-                return false;
-            }
-        });
+        int succeeded = runInParallel(100, () ->
+                transferService.createTransfer(source, target, eur("1.00")).getStatus() == TransferStatus.SUCCESSFUL);
 
-        assertThat(succeeded).isEqualTo(20);
-        assertThat(insufficientFunds.get()).isEqualTo(30);
-        assertThat(accountService.getExistingAccount(id).getBalance()).isEqualTo(Money.zero(EUR));
-        assertThat(transactionService.getAllTransactions(id)).hasSize(21);
+        assertThat(succeeded).isEqualTo(100);
+        assertThat(balanceOf(target)).isEqualTo(10000);
+        assertThat(balanceOf(source)).isZero();
+        assertThat(transactionService.getAllTransactions(target)).hasSize(100);
+    }
+
+    private Long fundedAccount(String amount) {
+        Instant now = Instant.now();
+        return accountService.save(Account.of(null, eur(amount), now, now)).getId();
+    }
+
+    private long balanceOf(Long accountId) {
+        return accountService.getExistingAccount(accountId).getBalance().amount();
     }
 
     @Test
-    void parallelDepositsAreAllCounted() throws Exception {
-        Long id = newAccount().getId();
+    void successfulTransferMovesMoneyAndWritesTwoLinkedEntries() {
+        Long from = fundedAccount("100.00");
+        Long to = newAccount().getId();
 
-        runInParallel(100, () -> {
-            transactionService.createTransaction(id, eur("1.00"));
-            return true;
+        Transfer transfer = transferService.createTransfer(from, to, eur("25.50"));
+
+        assertThat(transfer.getStatus()).isEqualTo(TransferStatus.SUCCESSFUL);
+        assertThat(transfer.getErrorCode()).isNull();
+        assertThat(balanceOf(from)).isEqualTo(7450);
+        assertThat(balanceOf(to)).isEqualTo(2550);
+        Transaction withdrawal = transactionService.getAllTransactions(from).getFirst();
+        Transaction deposit = transactionService.getAllTransactions(to).getFirst();
+        assertThat(withdrawal.getTransferId()).isEqualTo(transfer.getTransferId());
+        assertThat(withdrawal.getTransactionType()).isEqualTo(TransactionType.WITHDRAWAL);
+        assertThat(withdrawal.getBalanceAfter()).isEqualTo(eur("74.50"));
+        assertThat(deposit.getTransferId()).isEqualTo(transfer.getTransferId());
+        assertThat(deposit.getTransactionType()).isEqualTo(TransactionType.DEPOSIT);
+        assertThat(deposit.getBalanceAfter()).isEqualTo(eur("25.50"));
+        assertThat(transferService.getTransfer(transfer.getTransferId()).getStatus())
+                .isEqualTo(TransferStatus.SUCCESSFUL);
+    }
+
+    @Test
+    void failedTransferIsStoredWithItsErrorCodeAndMovesNothing() {
+        Long from = fundedAccount("10.00");
+        Long to = newAccount().getId();
+
+        Transfer transfer = transferService.createTransfer(from, to, eur("10.01"));
+
+        Transfer stored = transferService.getTransfer(transfer.getTransferId());
+        assertThat(stored.getStatus()).isEqualTo(TransferStatus.FAILED);
+        assertThat(stored.getErrorCode()).isEqualTo(ErrorClassification.INSUFFICIENT_FUNDS.getErrorCode());
+        assertThat(balanceOf(from)).isEqualTo(1000);
+        assertThat(balanceOf(to)).isZero();
+        assertThat(transactionService.getAllTransactions(to)).isEmpty();
+        assertThat(transactionService.getAllTransactions(from)).isEmpty();
+    }
+
+    @Test
+    void oppositeParallelTransfersDoNotDeadlockAndKeepTheTotal() throws Exception {
+        Long first = fundedAccount("1000.00");
+        Long second = fundedAccount("1000.00");
+        AtomicInteger direction = new AtomicInteger();
+
+        int succeeded = runInParallel(40, () -> {
+            boolean forward = direction.getAndIncrement() % 2 == 0;
+            Transfer transfer = forward
+                    ? transferService.createTransfer(first, second, eur("1.00"))
+                    : transferService.createTransfer(second, first, eur("1.00"));
+            return transfer.getStatus() == TransferStatus.SUCCESSFUL;
         });
 
-        assertThat(accountService.getExistingAccount(id).getBalance()).isEqualTo(eur("100.00"));
-        assertThat(transactionService.getAllTransactions(id)).hasSize(100);
+        assertThat(succeeded).isEqualTo(40);
+        assertThat(balanceOf(first) + balanceOf(second)).isEqualTo(200000);
+        assertThat(transactionService.getAllTransactions(first)).hasSize(40);
+        assertThat(transactionService.getAllTransactions(second)).hasSize(40);
+    }
+
+    @Test
+    void parallelTransfersFromOneAccountNeverOverdrawIt() throws Exception {
+        Long from = fundedAccount("10.00");
+        List<Long> targets = List.of(newAccount().getId(), newAccount().getId(), newAccount().getId());
+        AtomicInteger next = new AtomicInteger();
+
+        int succeeded = runInParallel(30, () -> {
+            Long target = targets.get(next.getAndIncrement() % targets.size());
+            return transferService.createTransfer(from, target, eur("1.00")).getStatus() == TransferStatus.SUCCESSFUL;
+        });
+
+        assertThat(succeeded).isEqualTo(10);
+        assertThat(balanceOf(from)).isZero();
+        assertThat(targets.stream().mapToLong(this::balanceOf).sum()).isEqualTo(1000);
     }
 
     private static int runInParallel(int tasks, Callable<Boolean> task) throws Exception {

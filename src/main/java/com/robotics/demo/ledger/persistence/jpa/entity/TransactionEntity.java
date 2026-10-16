@@ -48,6 +48,9 @@ public class TransactionEntity {
     @Column(nullable = false, length = 3)
     private String currency;
 
+    @Column(name = "transfer_id")
+    private Long transferId;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 }

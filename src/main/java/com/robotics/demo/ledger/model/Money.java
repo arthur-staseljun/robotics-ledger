@@ -21,6 +21,10 @@ public record Money(long amount, Currency currency) {
         return new Money(Math.addExact(amount, other.amount), currency);
     }
 
+    public Money negate() {
+        return new Money(Math.negateExact(amount), currency);
+    }
+
     public boolean isPositive() {
         return amount > 0;
     }

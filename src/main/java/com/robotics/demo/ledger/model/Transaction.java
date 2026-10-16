@@ -14,6 +14,7 @@ public class Transaction {
     private TransactionType transactionType;
     private Money amount;
     private Money balanceAfter;
+    private Long transferId;
     @Setter
     private Instant createdAt;
 
@@ -23,7 +24,12 @@ public class Transaction {
     }
 
     public Transaction(Long accountId, Money amount, Money balanceAfter) {
+        this(accountId, amount, balanceAfter, null);
+    }
+
+    public Transaction(Long accountId, Money amount, Money balanceAfter, Long transferId) {
         this.accountId = accountId;
+        this.transferId = transferId;
         this.transactionType = amount.isPositive() ? TransactionType.DEPOSIT : TransactionType.WITHDRAWAL;
         this.amount = amount;
         this.balanceAfter = balanceAfter;
@@ -35,12 +41,13 @@ public class Transaction {
         this.transactionType = other.transactionType;
         this.amount = other.amount;
         this.balanceAfter = other.balanceAfter;
+        this.transferId = other.transferId;
         this.createdAt = other.createdAt;
     }
 
     public static Transaction of(UUID transactionId, Long accountId, TransactionType transactionType,
-                                  Money amount, Money balanceAfter, Instant createdAt) {
-        Transaction transaction = new Transaction(accountId, amount, balanceAfter);
+                                  Money amount, Money balanceAfter, Long transferId, Instant createdAt) {
+        Transaction transaction = new Transaction(accountId, amount, balanceAfter, transferId);
         transaction.transactionId = transactionId;
         transaction.transactionType = transactionType;
         transaction.createdAt = createdAt;

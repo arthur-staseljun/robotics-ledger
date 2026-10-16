@@ -7,7 +7,7 @@ import com.robotics.demo.ledger.model.Money;
 import java.math.BigDecimal;
 import java.util.Currency;
 
-public record CreateTransactionRequest(String accountFrom, String accountTo,
+public record CreateTransferRequest(String accountFrom, String accountTo,
                                        String amount, String currency) {
 
     private static final Currency DEFAULT_CURRENCY = Currency.getInstance("EUR");
