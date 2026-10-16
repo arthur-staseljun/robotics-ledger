@@ -10,14 +10,9 @@ import java.util.Currency;
 @Getter
 public class Transfer {
 
-    public enum TransferStatus {
-        PENDING,
-        SUCCESSFUL,
-        FAILED
-    }
-
     @Setter
     private Long transferId;
+    private final Long ownerId;
     private final Long accountFrom;
     private final Long accountTo;
     private final Money amount;
@@ -26,9 +21,16 @@ public class Transfer {
     private final Instant createdAt;
     private Instant updatedAt;
 
-    private Transfer(Long transferId, Long accountFrom, Long accountTo, Money amount, TransferStatus status,
-                     String errorCode, Instant createdAt, Instant updatedAt) {
+    public enum TransferStatus {
+        PENDING,
+        SUCCESSFUL,
+        FAILED
+    }
+
+    private Transfer(Long transferId, Long ownerId, Long accountFrom, Long accountTo, Money amount,
+                     TransferStatus status, String errorCode, Instant createdAt, Instant updatedAt) {
         this.transferId = transferId;
+        this.ownerId = ownerId;
         this.accountFrom = accountFrom;
         this.accountTo = accountTo;
         this.amount = amount;
@@ -38,14 +40,14 @@ public class Transfer {
         this.updatedAt = updatedAt;
     }
 
-    public static Transfer pending(Long accountFrom, Long accountTo, Money amount) {
+    public static Transfer pending(Long ownerId, Long accountFrom, Long accountTo, Money amount) {
         Instant now = Instant.now();
-        return new Transfer(null, accountFrom, accountTo, amount, TransferStatus.PENDING, null, now, now);
+        return new Transfer(null, ownerId, accountFrom, accountTo, amount, TransferStatus.PENDING, null, now, now);
     }
 
-    public static Transfer of(Long transferId, Long accountFrom, Long accountTo, Money amount,
+    public static Transfer of(Long transferId, Long ownerId, Long accountFrom, Long accountTo, Money amount,
                               TransferStatus status, String errorCode, Instant createdAt, Instant updatedAt) {
-        return new Transfer(transferId, accountFrom, accountTo, amount, status, errorCode, createdAt, updatedAt);
+        return new Transfer(transferId, ownerId, accountFrom, accountTo, amount, status, errorCode, createdAt, updatedAt);
     }
 
     public Currency getCurrency() {
@@ -64,6 +66,7 @@ public class Transfer {
     }
 
     public Transfer copy() {
-        return new Transfer(transferId, accountFrom, accountTo, amount, status, errorCode, createdAt, updatedAt);
+        return new Transfer(transferId, ownerId, accountFrom, accountTo, amount, status, errorCode, createdAt,
+                updatedAt);
     }
 }

@@ -57,20 +57,81 @@ class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
         return delete(urlTemplate, uriVariables).header(HEADER_CLIENT_ID, TEST_CLIENT_ID);
     }
 
+    private long createCustomer() throws Exception {
+        String body = mockMvc.perform(authorizedPost("/api/customers"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        return objectMapper.readTree(body).get("customerId").asLong();
+    }
+
     private long createAccount() throws Exception {
-        String body = mockMvc.perform(authorizedPost("/api/accounts"))
+        return createAccountFor(createCustomer());
+    }
+
+    private long createAccountFor(long ownerId) throws Exception {
+        String body = mockMvc.perform(authorizedPost("/api/accounts")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ownerId\": \"" + ownerId + "\"}"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         return objectMapper.readTree(body).get("id").asLong();
     }
 
     @Test
-    void createAccountReturnsFreshAccountWithZeroBalance() throws Exception {
-        mockMvc.perform(authorizedPost("/api/accounts"))
+    void createCustomerReturnsTheNewCustomer() throws Exception {
+        long customerId = createCustomer();
+
+        mockMvc.perform(authorizedGet("/api/customers/{id}", customerId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.customerId").value(customerId));
+    }
+
+    @Test
+    void unknownCustomerReturns404() throws Exception {
+        mockMvc.perform(authorizedGet("/api/customers/999999"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.errorCode").value("cus-ex-01"));
+    }
+
+    @Test
+    void nonNumericCustomerIdReturns400() throws Exception {
+        mockMvc.perform(authorizedGet("/api/customers/abc"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("cus-ex-00"));
+    }
+
+    @Test
+    void createAccountReturnsFreshActiveAccountWithZeroBalanceAndItsOwner() throws Exception {
+        long ownerId = createCustomer();
+
+        mockMvc.perform(authorizedPost("/api/accounts")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ownerId\": \"" + ownerId + "\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").exists())
+                .andExpect(jsonPath("$.ownerId").value(ownerId))
                 .andExpect(jsonPath("$.currency").value("EUR"))
-                .andExpect(jsonPath("$.balance").value(0));
+                .andExpect(jsonPath("$.balance").value(0))
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.lastSeq").value(0));
+    }
+
+    @Test
+    void createAccountWithoutOwnerReturns400() throws Exception {
+        mockMvc.perform(authorizedPost("/api/accounts")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("cus-ex-00"));
+    }
+
+    @Test
+    void createAccountForUnknownCustomerReturns404() throws Exception {
+        mockMvc.perform(authorizedPost("/api/accounts")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ownerId\": \"999999\"}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.errorCode").value("cus-ex-01"));
     }
 
     @Test
@@ -146,10 +207,11 @@ class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
                 .andExpect(status().isOk());
     }
 
-    private long fundedAccount(String amount) {
+    private long fundedAccount(String amount) throws Exception {
         Instant now = Instant.now();
         Money balance = Money.of(new BigDecimal(amount), Currency.getInstance("EUR"));
-        return accountService.save(Account.of(null, balance, now, now)).getId();
+        long ownerId = createCustomer();
+        return accountService.save(Account.of(null, ownerId, balance, Account.AccountStatus.ACTIVE, 0, now, now)).getId();
     }
 
     private String transferBody(long from, long to, String amount) {
@@ -178,7 +240,9 @@ class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
                 .andExpect(jsonPath("$.balance").value(25.50));
         mockMvc.perform(authorizedGet("/api/accounts/{id}/transactions", from))
                 .andExpect(jsonPath("$[0].transactionType").value("WITHDRAWAL"))
-                .andExpect(jsonPath("$[0].transferId").value(transferId));
+                .andExpect(jsonPath("$[0].transferId").value(transferId))
+                .andExpect(jsonPath("$[0].seqId").value(1))
+                .andExpect(jsonPath("$[0].balanceAfter").value(74.50));
         mockMvc.perform(authorizedGet("/api/accounts/{id}/transactions", to))
                 .andExpect(jsonPath("$", hasSize(1)))
                 .andExpect(jsonPath("$[0].transactionType").value("DEPOSIT"))

@@ -4,57 +4,42 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.time.Instant;
-import java.util.UUID;
 
 @Getter
 public class Transaction {
-    @Setter
-    private UUID transactionId;
-    private Long accountId;
-    private TransactionType transactionType;
-    private Money amount;
-    private Money balanceAfter;
-    private Long transferId;
+
+    private final Long accountId;
+    private final Long transferId;
+    private final long seqId;
+    private final TransactionType transactionType;
+    private final Money amount;
+    private final Money balanceAfter;
     @Setter
     private Instant createdAt;
+
+    public Transaction(Long accountId, Long transferId, long seqId, Money amount, Money balanceAfter) {
+        this(accountId, transferId, seqId, amount.isPositive() ? TransactionType.DEPOSIT : TransactionType.WITHDRAWAL,
+                amount, balanceAfter, null);
+    }
+
+    private Transaction(Long accountId, Long transferId, long seqId, TransactionType transactionType, Money amount,
+                        Money balanceAfter, Instant createdAt) {
+        this.accountId = accountId;
+        this.transferId = transferId;
+        this.seqId = seqId;
+        this.transactionType = transactionType;
+        this.amount = amount;
+        this.balanceAfter = balanceAfter;
+        this.createdAt = createdAt;
+    }
+
+    public static Transaction of(Long accountId, Long transferId, long seqId, TransactionType transactionType,
+                                 Money amount, Money balanceAfter, Instant createdAt) {
+        return new Transaction(accountId, transferId, seqId, transactionType, amount, balanceAfter, createdAt);
+    }
 
     public enum TransactionType {
         DEPOSIT,
         WITHDRAWAL
-    }
-
-    public Transaction(Long accountId, Money amount, Money balanceAfter) {
-        this(accountId, amount, balanceAfter, null);
-    }
-
-    public Transaction(Long accountId, Money amount, Money balanceAfter, Long transferId) {
-        this.accountId = accountId;
-        this.transferId = transferId;
-        this.transactionType = amount.isPositive() ? TransactionType.DEPOSIT : TransactionType.WITHDRAWAL;
-        this.amount = amount;
-        this.balanceAfter = balanceAfter;
-    }
-
-    private Transaction(Transaction other) {
-        this.transactionId = other.transactionId;
-        this.accountId = other.accountId;
-        this.transactionType = other.transactionType;
-        this.amount = other.amount;
-        this.balanceAfter = other.balanceAfter;
-        this.transferId = other.transferId;
-        this.createdAt = other.createdAt;
-    }
-
-    public static Transaction of(UUID transactionId, Long accountId, TransactionType transactionType,
-                                  Money amount, Money balanceAfter, Long transferId, Instant createdAt) {
-        Transaction transaction = new Transaction(accountId, amount, balanceAfter, transferId);
-        transaction.transactionId = transactionId;
-        transaction.transactionType = transactionType;
-        transaction.createdAt = createdAt;
-        return transaction;
-    }
-
-    public Transaction copy() {
-        return new Transaction(this);
     }
 }

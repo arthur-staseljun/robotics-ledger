@@ -3,6 +3,7 @@ package com.robotics.demo.ledger.controller;
 import com.robotics.demo.ledger.exception.classification.ErrorClassification;
 import com.robotics.demo.ledger.exception.classification.LedgerServiceException;
 import com.robotics.demo.ledger.model.Account;
+import com.robotics.demo.ledger.model.request.CreateAccountRequest;
 import com.robotics.demo.ledger.service.AccountService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
@@ -15,8 +16,8 @@ public class AccountController {
     private final AccountService accountService;
 
     @PostMapping
-    public Account createAccount() {
-        return accountService.createAccount();
+    public Account createAccount(@RequestBody CreateAccountRequest request) {
+        return accountService.createAccount(request.toOwnerId());
     }
 
     @GetMapping("/{accountId}")

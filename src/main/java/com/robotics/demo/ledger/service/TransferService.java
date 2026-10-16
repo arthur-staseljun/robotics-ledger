@@ -38,7 +38,7 @@ public class TransferService {
         Account from = locked.get(accountFrom);
         Account to = locked.get(accountTo);
 
-        Transfer transfer = Transfer.pending(accountFrom, accountTo, amount);
+        Transfer transfer = Transfer.pending(from.getOwnerId(), accountFrom, accountTo, amount);
         try {
             from.apply(amount.negate());
             to.apply(amount);
@@ -49,12 +49,14 @@ public class TransferService {
         transfer = save(transfer);
 
         if (transfer.getStatus() == Transfer.TransferStatus.SUCCESSFUL) {
+            long fromSeq = from.nextSeq();
+            long toSeq = to.nextSeq();
             accountService.save(from);
             accountService.save(to);
-            transactionService.save(new Transaction(accountFrom, amount.negate(), from.getBalance(),
-                    transfer.getTransferId()));
-            transactionService.save(new Transaction(accountTo, amount, to.getBalance(),
-                    transfer.getTransferId()));
+            transactionService.save(new Transaction(accountFrom, transfer.getTransferId(), fromSeq,
+                    amount.negate(), from.getBalance()));
+            transactionService.save(new Transaction(accountTo, transfer.getTransferId(), toSeq,
+                    amount, to.getBalance()));
         }
         return transfer;
     }
@@ -75,6 +77,7 @@ public class TransferService {
     private Transfer save(Transfer transfer) {
         TransferEntity entity = TransferEntity.builder()
                 .id(transfer.getTransferId())
+                .ownerId(transfer.getOwnerId())
                 .accountFrom(transfer.getAccountFrom())
                 .accountTo(transfer.getAccountTo())
                 .amount(transfer.getAmount().amount())
@@ -89,7 +92,7 @@ public class TransferService {
 
     private static Transfer toDomain(TransferEntity entity) {
         Money amount = new Money(entity.getAmount(), Currency.getInstance(entity.getCurrency()));
-        return Transfer.of(entity.getId(), entity.getAccountFrom(), entity.getAccountTo(), amount,
+        return Transfer.of(entity.getId(), entity.getOwnerId(), entity.getAccountFrom(), entity.getAccountTo(), amount,
                 entity.getStatus(), entity.getErrorCode(), entity.getCreatedAt(), entity.getUpdatedAt());
     }
 }

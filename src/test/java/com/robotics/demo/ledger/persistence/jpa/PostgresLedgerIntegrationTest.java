@@ -10,18 +10,22 @@ import com.robotics.demo.ledger.model.Transaction.TransactionType;
 import com.robotics.demo.ledger.model.Transfer;
 import com.robotics.demo.ledger.model.Transfer.TransferStatus;
 import com.robotics.demo.ledger.service.AccountService;
+import com.robotics.demo.ledger.service.CustomerService;
 import com.robotics.demo.ledger.service.TransactionService;
 import com.robotics.demo.ledger.service.TransferService;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.IllegalTransactionStateException;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Currency;
 import java.util.List;
 import java.util.concurrent.Callable;
@@ -29,6 +33,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -41,6 +46,12 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Autowired
     private AccountService accountService;
+
+    @Autowired
+    private CustomerService customerService;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     @Autowired
     private TransactionService transactionService;
@@ -56,7 +67,8 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     private Account newAccount() {
-        return accountService.createAccount();
+        Long ownerId = customerService.createCustomer().getCustomerId();
+        return accountService.createAccount(ownerId);
     }
 
     @Test
@@ -141,7 +153,9 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private Long fundedAccount(String amount) {
         Instant now = Instant.now();
-        return accountService.save(Account.of(null, eur(amount), now, now)).getId();
+        Long ownerId = customerService.createCustomer().getCustomerId();
+        return accountService.save(Account.of(null, ownerId, eur(amount), Account.AccountStatus.ACTIVE, 0, now, now))
+                .getId();
     }
 
     private long balanceOf(Long accountId) {
@@ -169,6 +183,71 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(deposit.getBalanceAfter()).isEqualTo(eur("25.50"));
         assertThat(transferService.getTransfer(transfer.getTransferId()).getStatus())
                 .isEqualTo(TransferStatus.SUCCESSFUL);
+    }
+
+    @Test
+    void sequenceNumbersOfAnAccountGrowByOnePerEntryAndFollowLastSeq() {
+        Long first = fundedAccount("100.00");
+        Long second = newAccount().getId();
+        transferService.createTransfer(first, second, eur("1.00"));
+        transferService.createTransfer(second, first, eur("0.50"));
+        transferService.createTransfer(first, second, eur("2.00"));
+
+        assertThat(transactionService.getAllTransactions(first)).extracting(Transaction::getSeqId)
+                .containsExactly(3L, 2L, 1L);
+        assertThat(transactionService.getAllTransactions(second)).extracting(Transaction::getSeqId)
+                .containsExactly(3L, 2L, 1L);
+        assertThat(accountService.getExistingAccount(first).getLastSeq()).isEqualTo(3);
+        assertThat(accountService.getExistingAccount(second).getLastSeq()).isEqualTo(3);
+    }
+
+    @Test
+    void transferRecordsTheOwnerOfTheSourceAccount() {
+        Long from = fundedAccount("10.00");
+        Long to = newAccount().getId();
+
+        Transfer transfer = transferService.createTransfer(from, to, eur("1.00"));
+
+        assertThat(transfer.getOwnerId()).isEqualTo(accountService.getExistingAccount(from).getOwnerId());
+    }
+
+    @Test
+    void frozenAccountCannotSendMoney() {
+        Instant now = Instant.now();
+        Long ownerId = customerService.createCustomer().getCustomerId();
+        Long frozen = accountService.save(Account.of(null, ownerId, eur("10.00"), Account.AccountStatus.FROZEN, 0,
+                now, now)).getId();
+        Long to = newAccount().getId();
+
+        Transfer transfer = transferService.createTransfer(frozen, to, eur("1.00"));
+
+        assertThat(transfer.getStatus()).isEqualTo(TransferStatus.FAILED);
+        assertThat(transfer.getErrorCode()).isEqualTo(ErrorClassification.ACCOUNT_NOT_ACTIVE.getErrorCode());
+        assertThat(balanceOf(frozen)).isEqualTo(1000);
+    }
+
+    @Test
+    void transactionsCannotBeUpdatedOrDeleted() {
+        Long from = fundedAccount("10.00");
+        Long to = newAccount().getId();
+        transferService.createTransfer(from, to, eur("1.00"));
+
+        assertThatThrownBy(() -> jdbcTemplate.update("update transactions set amount = 0 where account_id = ?", from))
+                .hasMessageContaining("append-only");
+        assertThatThrownBy(() -> jdbcTemplate.update("delete from transactions where account_id = ?", from))
+                .hasMessageContaining("append-only");
+    }
+
+    @Test
+    void databaseRejectsFailedTransferWithoutErrorCode() {
+        Long from = fundedAccount("10.00");
+        Long to = newAccount().getId();
+        Long ownerId = accountService.getExistingAccount(from).getOwnerId();
+
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                "insert into transfers (owner_id, account_from, account_to, amount, currency, status)"
+                        + " values (?, ?, ?, 100, 'EUR', 'FAILED')", ownerId, from, to))
+                .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
@@ -203,8 +282,11 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThat(succeeded).isEqualTo(40);
         assertThat(balanceOf(first) + balanceOf(second)).isEqualTo(200000);
-        assertThat(transactionService.getAllTransactions(first)).hasSize(40);
-        assertThat(transactionService.getAllTransactions(second)).hasSize(40);
+        List<Long> expectedSequence = LongStream.rangeClosed(1, 40).boxed().sorted(Comparator.reverseOrder()).toList();
+        assertThat(transactionService.getAllTransactions(first)).extracting(Transaction::getSeqId)
+                .containsExactlyElementsOf(expectedSequence);
+        assertThat(transactionService.getAllTransactions(second)).extracting(Transaction::getSeqId)
+                .containsExactlyElementsOf(expectedSequence);
     }
 
     @Test

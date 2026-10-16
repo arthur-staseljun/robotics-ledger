@@ -53,7 +53,7 @@ class TransferServiceTest {
 
     private static Account account(long id, long cents) {
         Instant now = Instant.now();
-        return Account.of(id, eur(cents), now, now);
+        return Account.of(id, 100L + id, eur(cents), Account.AccountStatus.ACTIVE, 4, now, now);
     }
 
     private void givenAccounts(Account from, Account to) {
@@ -93,11 +93,15 @@ class TransferServiceTest {
         assertThat(withdrawal.getAmount()).isEqualTo(eur(-2500));
         assertThat(withdrawal.getBalanceAfter()).isEqualTo(eur(7500));
         assertThat(withdrawal.getTransferId()).isEqualTo(7L);
+        assertThat(withdrawal.getSeqId()).isEqualTo(5);
         assertThat(deposit.getAccountId()).isEqualTo(2L);
         assertThat(deposit.getTransactionType()).isEqualTo(Transaction.TransactionType.DEPOSIT);
         assertThat(deposit.getAmount()).isEqualTo(eur(2500));
         assertThat(deposit.getBalanceAfter()).isEqualTo(eur(2500));
         assertThat(deposit.getTransferId()).isEqualTo(7L);
+        assertThat(deposit.getSeqId()).isEqualTo(5);
+        assertThat(accounts.getAllValues()).extracting(Account::getLastSeq).containsOnly(5L);
+        assertThat(result.getOwnerId()).isEqualTo(101L);
     }
 
     @Test
@@ -114,9 +118,23 @@ class TransferServiceTest {
     }
 
     @Test
+    void inactiveAccountIsRecordedAsFailedTransfer() {
+        Instant now = Instant.now();
+        Account frozen = Account.of(1L, 101L, eur(10000), Account.AccountStatus.FROZEN, 0, now, now);
+        givenAccounts(frozen, account(2L, 0));
+        givenTransfersAreStored();
+
+        Transfer result = transferService.createTransfer(1L, 2L, eur(100));
+
+        assertThat(result.getStatus()).isEqualTo(TransferStatus.FAILED);
+        assertThat(result.getErrorCode()).isEqualTo(ErrorClassification.ACCOUNT_NOT_ACTIVE.getErrorCode());
+        verify(accountService, never()).save(any());
+    }
+
+    @Test
     void currencyMismatchIsRecordedAsFailedTransfer() {
         Instant now = Instant.now();
-        Account usdAccount = Account.of(2L, new Money(0, Currency.getInstance("USD")), now, now);
+        Account usdAccount = Account.of(2L, 102L, new Money(0, Currency.getInstance("USD")), Account.AccountStatus.ACTIVE, 0, now, now);
         givenAccounts(account(1L, 10000), usdAccount);
         givenTransfersAreStored();
 

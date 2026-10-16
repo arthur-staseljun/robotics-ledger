@@ -33,6 +33,9 @@ public class TransferEntity {
     @Column(name = "transfer_id")
     private Long id;
 
+    @Column(name = "owner_id", nullable = false)
+    private Long ownerId;
+
     @Column(name = "account_from", nullable = false)
     private Long accountFrom;
 

@@ -5,6 +5,7 @@ import com.robotics.demo.ledger.exception.classification.LedgerServiceException;
 import com.robotics.demo.ledger.model.Account;
 import com.robotics.demo.ledger.model.Money;
 import com.robotics.demo.ledger.persistence.jpa.AccountRepository;
+import com.robotics.demo.ledger.persistence.jpa.CustomerRepository;
 import com.robotics.demo.ledger.persistence.jpa.entity.AccountEntity;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -18,9 +19,12 @@ import java.util.Currency;
 public class AccountService {
 
     private final AccountRepository accountRepository;
+    private final CustomerRepository customerRepository;
 
-    public Account createAccount() {
-        return save(new Account());
+    public Account createAccount(Long ownerId) {
+        customerRepository.findById(ownerId)
+                .orElseThrow(() -> new LedgerServiceException(ErrorClassification.CUSTOMER_DOES_NOT_EXIST));
+        return save(Account.openFor(ownerId));
     }
 
     public Account getExistingAccount(Long accountId) {
@@ -39,8 +43,11 @@ public class AccountService {
     public Account save(Account account) {
         AccountEntity entity = AccountEntity.builder()
                 .id(account.getId())
+                .ownerId(account.getOwnerId())
                 .balance(account.getBalance().amount())
                 .currency(account.getCurrency().getCurrencyCode())
+                .status(account.getStatus())
+                .lastSeq(account.getLastSeq())
                 .createdAt(account.getCreatedAt())
                 .updatedAt(account.getUpdatedAt())
                 .build();
@@ -49,6 +56,7 @@ public class AccountService {
 
     private static Account toDomain(AccountEntity entity) {
         Money balance = new Money(entity.getBalance(), Currency.getInstance(entity.getCurrency()));
-        return Account.of(entity.getId(), balance, entity.getCreatedAt(), entity.getUpdatedAt());
+        return Account.of(entity.getId(), entity.getOwnerId(), balance, entity.getStatus(), entity.getLastSeq(),
+                entity.getCreatedAt(), entity.getUpdatedAt());
     }
 }

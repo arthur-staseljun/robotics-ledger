@@ -17,7 +17,7 @@ class AccountTest {
 
     private static Account accountWithBalance(long cents) {
         Instant now = Instant.now();
-        return Account.of(1L, new Money(cents, EUR), now, now);
+        return Account.of(1L, 7L, new Money(cents, EUR), Account.AccountStatus.ACTIVE, 0, now, now);
     }
 
     @Test
@@ -58,5 +58,27 @@ class AccountTest {
                 .extracting("errorClassification")
                 .isEqualTo(ErrorClassification.CURRENCY_MISMATCH);
         assertThat(account.getBalance()).isEqualTo(new Money(1000, EUR));
+    }
+
+    @Test
+    void frozenAccountRejectsAnyChange() {
+        Instant now = Instant.now();
+        Account account = Account.of(1L, 7L, new Money(1000, EUR), Account.AccountStatus.FROZEN, 0, now, now);
+
+        assertThatThrownBy(() -> account.apply(new Money(100, EUR)))
+                .isInstanceOf(LedgerServiceException.class)
+                .extracting("errorClassification")
+                .isEqualTo(ErrorClassification.ACCOUNT_NOT_ACTIVE);
+        assertThat(account.getBalance()).isEqualTo(new Money(1000, EUR));
+    }
+
+    @Test
+    void nextSeqContinuesFromTheLastSequenceNumber() {
+        Instant now = Instant.now();
+        Account account = Account.of(1L, 7L, new Money(0, EUR), Account.AccountStatus.ACTIVE, 41, now, now);
+
+        assertThat(account.nextSeq()).isEqualTo(42);
+        assertThat(account.nextSeq()).isEqualTo(43);
+        assertThat(account.getLastSeq()).isEqualTo(43);
     }
 }

@@ -6,6 +6,7 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
+import jakarta.persistence.IdClass;
 import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -15,11 +16,12 @@ import lombok.Setter;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+import java.io.Serializable;
 import java.time.Instant;
-import java.util.UUID;
 
 @Entity
 @Table(name = "transactions")
+@IdClass(TransactionEntity.TransactionKey.class)
 @Getter
 @Setter
 @NoArgsConstructor
@@ -28,11 +30,15 @@ import java.util.UUID;
 public class TransactionEntity {
 
     @Id
-    @Column(name = "transaction_id")
-    private UUID id;
-
-    @Column(name = "account_id", nullable = false)
+    @Column(name = "account_id")
     private Long accountId;
+
+    @Id
+    @Column(name = "transfer_id")
+    private Long transferId;
+
+    @Column(name = "seq_id", nullable = false)
+    private long seqId;
 
     @Enumerated(EnumType.STRING)
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
@@ -48,9 +54,9 @@ public class TransactionEntity {
     @Column(nullable = false, length = 3)
     private String currency;
 
-    @Column(name = "transfer_id")
-    private Long transferId;
-
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
+
+    public record TransactionKey(Long accountId, Long transferId) implements Serializable {
+    }
 }

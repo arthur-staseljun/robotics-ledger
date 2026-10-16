@@ -14,7 +14,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -39,6 +38,19 @@ class TransactionServiceTest {
         transactionService = new TransactionService(transactionRepository, accountService);
     }
 
+    private static TransactionEntity entity(long seqId, Transaction.TransactionType type, long amount, long balanceAfter) {
+        TransactionEntity entity = new TransactionEntity();
+        entity.setAccountId(1L);
+        entity.setTransferId(10L);
+        entity.setSeqId(seqId);
+        entity.setTransactionType(type);
+        entity.setAmount(amount);
+        entity.setBalanceAfter(balanceAfter);
+        entity.setCurrency("EUR");
+        entity.setCreatedAt(Instant.now());
+        return entity;
+    }
+
     @Test
     void getAllTransactionsChecksAccountExistsBeforeReturningHistory() {
         when(accountService.getExistingAccount(99L))
@@ -49,27 +61,19 @@ class TransactionServiceTest {
                 .extracting("errorClassification")
                 .isEqualTo(ErrorClassification.ACCOUNT_DOES_NOT_EXIST);
 
-        verify(transactionRepository, never()).findByAccountIdOrderByCreatedAtDesc(any());
+        verify(transactionRepository, never()).findByAccountIdOrderBySeqIdDesc(any());
     }
 
     @Test
-    void getAllTransactionsReturnsTheHistoryWhenAccountExists() {
+    void getAllTransactionsReturnsTheHistoryNewestFirstWhenAccountExists() {
         when(accountService.getExistingAccount(1L)).thenReturn(new Account(1L));
-        TransactionEntity entity = TransactionEntity.builder()
-                .id(UUID.randomUUID())
-                .accountId(1L)
-                .transferId(10L)
-                .transactionType(Transaction.TransactionType.WITHDRAWAL)
-                .amount(-300)
-                .balanceAfter(700)
-                .currency("EUR")
-                .createdAt(Instant.now())
-                .build();
-        when(transactionRepository.findByAccountIdOrderByCreatedAtDesc(1L)).thenReturn(List.of(entity));
+        when(transactionRepository.findByAccountIdOrderBySeqIdDesc(1L)).thenReturn(List.of(
+                entity(2, Transaction.TransactionType.WITHDRAWAL, -300, 700),
+                entity(1, Transaction.TransactionType.DEPOSIT, 1000, 1000)));
 
         List<Transaction> result = transactionService.getAllTransactions(1L);
 
-        assertThat(result).hasSize(1);
+        assertThat(result).extracting(Transaction::getSeqId).containsExactly(2L, 1L);
         assertThat(result.getFirst().getAmount().amount()).isEqualTo(-300);
         assertThat(result.getFirst().getBalanceAfter().amount()).isEqualTo(700);
         assertThat(result.getFirst().getTransferId()).isEqualTo(10L);

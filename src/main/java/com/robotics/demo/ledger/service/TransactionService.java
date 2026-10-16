@@ -11,7 +11,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.util.Currency;
 import java.util.List;
-import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -23,16 +22,16 @@ public class TransactionService {
     @Transactional(readOnly = true)
     public List<Transaction> getAllTransactions(Long accountId) {
         accountService.getExistingAccount(accountId);
-        return transactionRepository.findByAccountIdOrderByCreatedAtDesc(accountId).stream()
+        return transactionRepository.findByAccountIdOrderBySeqIdDesc(accountId).stream()
                 .map(TransactionService::toDomain)
                 .toList();
     }
 
     public Transaction save(Transaction transaction) {
         TransactionEntity entity = TransactionEntity.builder()
-                .id(UUID.randomUUID())
                 .accountId(transaction.getAccountId())
                 .transferId(transaction.getTransferId())
+                .seqId(transaction.getSeqId())
                 .transactionType(transaction.getTransactionType())
                 .amount(transaction.getAmount().amount())
                 .balanceAfter(transaction.getBalanceAfter().amount())
@@ -44,8 +43,8 @@ public class TransactionService {
 
     private static Transaction toDomain(TransactionEntity entity) {
         Currency currency = Currency.getInstance(entity.getCurrency());
-        return Transaction.of(entity.getId(), entity.getAccountId(), entity.getTransactionType(),
-                new Money(entity.getAmount(), currency), new Money(entity.getBalanceAfter(), currency),
-                entity.getTransferId(), entity.getCreatedAt());
+        return Transaction.of(entity.getAccountId(), entity.getTransferId(), entity.getSeqId(),
+                entity.getTransactionType(), new Money(entity.getAmount(), currency),
+                new Money(entity.getBalanceAfter(), currency), entity.getCreatedAt());
     }
 }
