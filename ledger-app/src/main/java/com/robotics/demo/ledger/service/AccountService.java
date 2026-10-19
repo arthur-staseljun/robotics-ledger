@@ -58,6 +58,13 @@ public class AccountService {
                 .orElseThrow(() -> new LedgerServiceException(ErrorClassification.ACCOUNT_DOES_NOT_EXIST));
     }
 
+    @Transactional
+    public void freeze(Long accountId) {
+        Account account = getExistingAccountLocking(accountId);
+        account.freeze();
+        save(account);
+    }
+
     public Account save(Account account) {
         AccountEntity entity = AccountEntity.builder()
                 .id(account.getId())

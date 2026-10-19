@@ -81,4 +81,17 @@ class AccountTest {
         assertThat(account.nextSeq()).isEqualTo(43);
         assertThat(account.getLastSeq()).isEqualTo(43);
     }
+
+    @Test
+    void freezingBlocksTheAccount() {
+        Account account = accountWithBalance(1000);
+
+        account.freeze();
+
+        assertThat(account.getStatus()).isEqualTo(Account.AccountStatus.FROZEN);
+        assertThatThrownBy(() -> account.apply(new Money(100, EUR)))
+                .isInstanceOf(LedgerServiceException.class)
+                .extracting("errorClassification")
+                .isEqualTo(ErrorClassification.ACCOUNT_NOT_ACTIVE);
+    }
 }

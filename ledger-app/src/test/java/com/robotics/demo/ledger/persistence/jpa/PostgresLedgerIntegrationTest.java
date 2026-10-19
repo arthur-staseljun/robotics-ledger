@@ -437,4 +437,37 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
             pool.shutdown();
         }
     }
+
+    @Test
+    void frozenSourceAccountFailsTheTransferWithoutMovingMoney() {
+        Long from = fundedAccount("100.00");
+        Long to = newAccount().getId();
+        Long transferId = transferService.accept("test-client", UUID.randomUUID(), from, to, eur("10.00"))
+                .transfer().getTransferId();
+
+        accountService.freeze(from);
+        Transfer result = transferService.process(transferId);
+
+        assertThat(accountService.getExistingAccount(from).getStatus()).isEqualTo(Account.AccountStatus.FROZEN);
+        assertThat(result.getStatus()).isEqualTo(TransferStatus.FAILED);
+        assertThat(result.getErrorCode()).isEqualTo(ErrorClassification.ACCOUNT_NOT_ACTIVE.getErrorCode());
+        assertThat(balanceOf(from)).isEqualTo(10000);
+        assertThat(balanceOf(to)).isZero();
+    }
+
+    @Test
+    void processingStoresOneProcessedEventAndAReplayAddsNone() {
+        Long from = fundedAccount("100.00");
+        Long to = newAccount().getId();
+        Long transferId = transferService.accept("test-client", UUID.randomUUID(), from, to, eur("10.00"))
+                .transfer().getTransferId();
+
+        transferService.process(transferId);
+        transferService.process(transferId);
+
+        Integer processedEvents = jdbcTemplate.queryForObject(
+                "select count(*) from outbox where transfer_id = ? and event_type = 'processed' and topic = 'transfer-complete'",
+                Integer.class, transferId);
+        assertThat(processedEvents).isEqualTo(1);
+    }
 }

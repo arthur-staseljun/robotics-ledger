@@ -8,12 +8,19 @@ import com.robotics.demo.ledger.model.event.TransferCreatedEvent;
 import com.robotics.demo.ledger.service.CustomerService;
 import com.robotics.demo.ledger.service.AccountService;
 import com.robotics.demo.ledger.service.TransferService;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.serialization.StringDeserializer;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.kafka.KafkaContainer;
@@ -21,15 +28,21 @@ import org.testcontainers.kafka.KafkaContainer;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Currency;
+import java.util.List;
+import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.Mockito.atLeast;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.verify;
 
 @Tag("container")
-@SpringBootTest
+@SpringBootTest(properties = "ledger.consumer.retry-interval-ms=100")
 class TransferConsumerIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final Currency EUR = Currency.getInstance("EUR");
@@ -45,7 +58,7 @@ class TransferConsumerIntegrationTest extends AbstractPostgresIntegrationTest {
         registry.add("spring.kafka.bootstrap-servers", KAFKA::getBootstrapServers);
     }
 
-    @Autowired
+    @MockitoSpyBean
     private TransferService transferService;
 
     @Autowired
@@ -86,6 +99,36 @@ class TransferConsumerIntegrationTest extends AbstractPostgresIntegrationTest {
     private void awaitStatus(Long transferId, TransferStatus expected) {
         await().atMost(SETTLE_TIMEOUT).untilAsserted(
                 () -> assertThat(transferService.getTransfer(transferId).getStatus()).isEqualTo(expected));
+    }
+
+    private void publishRaw(Long accountFrom, String payload) throws Exception {
+        kafkaTemplate.send(TransferCreatedEvent.TOPIC, String.valueOf(accountFrom), payload)
+                .get(10, TimeUnit.SECONDS);
+    }
+
+    private List<ConsumerRecord<String, String>> awaitDeadLetters(Long accountFrom) {
+        Properties properties = new Properties();
+        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers());
+        properties.put(ConsumerConfig.GROUP_ID_CONFIG, UUID.randomUUID().toString());
+        properties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        List<ConsumerRecord<String, String>> found = new ArrayList<>();
+        try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(properties)) {
+            List<TopicPartition> partitions = consumer.partitionsFor(TransferDeadLetterRecoverer.DLQ_TOPIC).stream()
+                    .map(info -> new TopicPartition(info.topic(), info.partition()))
+                    .toList();
+            consumer.assign(partitions);
+            consumer.seekToBeginning(partitions);
+            long deadline = System.nanoTime() + SETTLE_TIMEOUT.toNanos();
+            while (found.isEmpty() && System.nanoTime() < deadline) {
+                consumer.poll(Duration.ofMillis(200)).forEach(record -> {
+                    if (String.valueOf(accountFrom).equals(record.key())) {
+                        found.add(record);
+                    }
+                });
+            }
+        }
+        return found;
     }
 
     private long balanceOf(Long accountId) {
@@ -133,5 +176,45 @@ class TransferConsumerIntegrationTest extends AbstractPostgresIntegrationTest {
         awaitStatus(transferId, TransferStatus.FAILED);
         assertThat(balanceOf(from)).isEqualTo(1000);
         assertThat(balanceOf(to)).isZero();
+    }
+
+    @Test
+    void anUnreadableMessageGoesStraightToTheDlqAndFreezesTheAccount() throws Exception {
+        Long from = fundedAccount("100.00");
+
+        publishRaw(from, "not json");
+
+        List<ConsumerRecord<String, String>> deadLetters = awaitDeadLetters(from);
+        assertThat(deadLetters).hasSize(1);
+        assertThat(deadLetters.getFirst().value()).isEqualTo("not json");
+        assertThat(accountService.getExistingAccount(from).getStatus()).isEqualTo(Account.AccountStatus.FROZEN);
+    }
+
+    @Test
+    void aMessageOfAnUnknownTransferGoesToTheDlqAndFreezesTheAccount() throws Exception {
+        Long from = fundedAccount("100.00");
+
+        publishRaw(from, "{\"transferId\": 999999999, \"accountFrom\": " + from
+                + ", \"accountTo\": 1, \"amount\": 100, \"currency\": \"EUR\"}");
+
+        assertThat(awaitDeadLetters(from)).hasSize(1);
+        assertThat(accountService.getExistingAccount(from).getStatus()).isEqualTo(Account.AccountStatus.FROZEN);
+    }
+
+    @Test
+    void aTemporaryFailureIsRetriedUntilItSucceeds() throws Exception {
+        Long from = fundedAccount("100.00");
+        Long to = fundedAccount("0.00");
+        Long transferId = pendingTransfer(from, to, "10.00");
+        doThrow(new QueryTimeoutException("db down"), new QueryTimeoutException("db down"))
+                .doCallRealMethod()
+                .when(transferService).process(transferId);
+
+        publishCreatedEvent(transferId, from);
+
+        awaitStatus(transferId, TransferStatus.SUCCESSFUL);
+        verify(transferService, atLeast(3)).process(transferId);
+        assertThat(accountService.getExistingAccount(from).getStatus()).isEqualTo(Account.AccountStatus.ACTIVE);
+        assertThat(balanceOf(from)).isEqualTo(9000);
     }
 }

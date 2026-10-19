@@ -329,4 +329,37 @@ class TransferServiceTest {
     private static Money eur(long cents) {
         return new Money(cents, EUR);
     }
+
+    @Test
+    void successfulProcessingWritesAProcessedEventToTheOutbox() {
+        when(transferRepository.findByIdLocking(7L)).thenReturn(Optional.of(pendingEntity(1L, 2L, 2500, "EUR")));
+        when(accountService.getExistingAccountLocking(1L)).thenReturn(account(1L, 10000));
+        when(accountService.getExistingAccountLocking(2L)).thenReturn(account(2L, 0));
+        givenTransfersAreStored();
+
+        transferService.process(7L);
+
+        ArgumentCaptor<OutboxEntity> event = ArgumentCaptor.forClass(OutboxEntity.class);
+        verify(outboxRepository).save(event.capture());
+        assertThat(event.getValue().getEventType()).isEqualTo(OutboxEntity.EventType.processed);
+        assertThat(event.getValue().getTopic()).isEqualTo("transfer-complete");
+        assertThat(event.getValue().getAccountId()).isEqualTo(1L);
+        assertThat(event.getValue().getTransferId()).isEqualTo(7L);
+        assertThat(event.getValue().getPayload()).contains("\"status\":\"SUCCESSFUL\"");
+    }
+
+    @Test
+    void failedProcessingWritesAProcessedEventWithTheErrorCode() {
+        when(transferRepository.findByIdLocking(7L)).thenReturn(Optional.of(pendingEntity(1L, 2L, 2500, "EUR")));
+        when(accountService.getExistingAccountLocking(1L)).thenReturn(account(1L, 1000));
+        when(accountService.getExistingAccountLocking(2L)).thenReturn(account(2L, 0));
+        givenTransfersAreStored();
+
+        transferService.process(7L);
+
+        ArgumentCaptor<OutboxEntity> event = ArgumentCaptor.forClass(OutboxEntity.class);
+        verify(outboxRepository).save(event.capture());
+        assertThat(event.getValue().getPayload()).contains("\"status\":\"FAILED\"")
+                .contains(ErrorClassification.INSUFFICIENT_FUNDS.getErrorCode());
+    }
 }

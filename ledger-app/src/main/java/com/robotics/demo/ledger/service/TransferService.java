@@ -8,6 +8,7 @@ import com.robotics.demo.ledger.model.domain.Money;
 import com.robotics.demo.ledger.model.domain.Transaction;
 import com.robotics.demo.ledger.model.domain.Transfer;
 import com.robotics.demo.ledger.model.event.TransferCreatedEvent;
+import com.robotics.demo.ledger.model.event.TransferProcessedEvent;
 import com.robotics.demo.ledger.model.response.TransferResponse;
 import com.robotics.demo.ledger.persistence.jpa.OutboxRepository;
 import com.robotics.demo.ledger.persistence.jpa.TransferRepository;
@@ -106,6 +107,7 @@ public class TransferService {
             transactionService.save(new Transaction(accountTo, transfer.getTransferId(), toSeq,
                     amount, to.getBalance()));
         }
+        saveProcessedEvent(transfer);
         return transfer;
     }
 
@@ -123,14 +125,25 @@ public class TransferService {
     }
 
     private void saveCreatedEvent(Transfer transfer) {
+        saveOutboxEvent(transfer, OutboxEntity.EventType.created, TransferCreatedEvent.TOPIC,
+                new TransferCreatedEvent(transfer.getTransferId(), transfer.getAccountFrom(),
+                        transfer.getAccountTo(), transfer.getAmount().amount(),
+                        transfer.getCurrency().getCurrencyCode()));
+    }
+
+    private void saveProcessedEvent(Transfer transfer) {
+        saveOutboxEvent(transfer, OutboxEntity.EventType.processed, TransferProcessedEvent.TOPIC,
+                new TransferProcessedEvent(transfer.getTransferId(), transfer.getStatus().name(),
+                        transfer.getErrorCode()));
+    }
+
+    private void saveOutboxEvent(Transfer transfer, OutboxEntity.EventType eventType, String topic, Object event) {
         Instant now = Instant.now();
-        TransferCreatedEvent event = new TransferCreatedEvent(transfer.getTransferId(), transfer.getAccountFrom(),
-                transfer.getAccountTo(), transfer.getAmount().amount(), transfer.getCurrency().getCurrencyCode());
         outboxRepository.save(OutboxEntity.builder()
                 .accountId(transfer.getAccountFrom())
                 .transferId(transfer.getTransferId())
-                .eventType(OutboxEntity.EventType.created)
-                .topic(TransferCreatedEvent.TOPIC)
+                .eventType(eventType)
+                .topic(topic)
                 .payload(objectMapper.writeValueAsString(event))
                 .createdAt(now)
                 .updatedAt(now)

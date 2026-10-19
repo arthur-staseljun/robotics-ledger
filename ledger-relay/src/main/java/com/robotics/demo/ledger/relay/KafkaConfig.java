@@ -10,11 +10,21 @@ import org.springframework.kafka.config.TopicBuilder;
 public class KafkaConfig {
 
     public static final String TRANSFERS_TOPIC = "transfers";
+    public static final String TRANSFER_COMPLETE_TOPIC = "transfer-complete";
 
     @Bean
     public NewTopic transfersTopic(@Value("${ledger.relay.partitions}") int partitions,
                                    @Value("${ledger.relay.replicas}") int replicas) {
         return TopicBuilder.name(TRANSFERS_TOPIC)
+                .partitions(partitions)
+                .replicas(replicas)
+                .build();
+    }
+
+    @Bean
+    public NewTopic transferCompleteTopic(@Value("${ledger.relay.partitions}") int partitions,
+                                          @Value("${ledger.relay.replicas}") int replicas) {
+        return TopicBuilder.name(TRANSFER_COMPLETE_TOPIC)
                 .partitions(partitions)
                 .replicas(replicas)
                 .build();

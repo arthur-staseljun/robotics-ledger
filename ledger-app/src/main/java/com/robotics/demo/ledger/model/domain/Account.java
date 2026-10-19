@@ -65,6 +65,11 @@ public class Account {
         updatedAt = Instant.now();
     }
 
+    public void freeze() {
+        status = AccountStatus.FROZEN;
+        updatedAt = Instant.now();
+    }
+
     public long nextSeq() {
         lastSeq++;
         return lastSeq;
