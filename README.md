@@ -10,9 +10,13 @@ This README is for orientation only: please see the diagram `Ledger System Desig
 Java 25 and Docker are required. PostgreSQL is the only persistence.
 
 ```bash
-docker compose up -d
-./mvnw spring-boot:run
+./app.sh
 ./mvnw test
 ./mvnw test -DexcludedGroups= -Dgroups=container
 ```
-The tests with the `container` group start PostgreSQL with Testcontainers, so Docker must be running.
+The tests with the `container` group start PostgreSQL and Kafka with Testcontainers, so Docker must be running.
+
+## Modules
+
+- `ledger-app`: REST API, services, migrations.
+- `ledger-relay`: publishes the `outbox` table to Kafka. Shares no code with the app.
