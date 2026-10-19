@@ -18,5 +18,5 @@ The tests with the `container` group start PostgreSQL and Kafka with Testcontain
 
 ## Modules
 
-- `ledger-app`: REST API, services, migrations.
+- `ledger-app`: REST API, Kafka consumer that settles transfers, services, migrations.
 - `ledger-relay`: publishes the `outbox` table to Kafka. Shares no code with the app.

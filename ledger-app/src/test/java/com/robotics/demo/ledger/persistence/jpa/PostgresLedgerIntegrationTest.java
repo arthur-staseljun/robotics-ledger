@@ -41,7 +41,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @Tag("container")
-@SpringBootTest
+@SpringBootTest(properties = {"spring.kafka.listener.auto-startup=false", "spring.kafka.admin.auto-create=false"})
 class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final Currency EUR = Currency.getInstance("EUR");

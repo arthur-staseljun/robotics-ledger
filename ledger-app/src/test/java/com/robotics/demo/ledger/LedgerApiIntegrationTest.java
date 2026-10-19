@@ -29,7 +29,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @Tag("container")
-@SpringBootTest
+@SpringBootTest(properties = {"spring.kafka.listener.auto-startup=false", "spring.kafka.admin.auto-create=false"})
 @AutoConfigureMockMvc
 class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
 
