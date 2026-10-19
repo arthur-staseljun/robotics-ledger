@@ -1,13 +1,15 @@
 package com.robotics.demo.ledger.controller;
 
+import com.robotics.demo.ledger.model.response.TransactionPageResponse;
 import com.robotics.demo.ledger.model.response.TransactionResponse;
 import com.robotics.demo.ledger.service.TransactionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
-
+import static com.robotics.demo.ledger.controller.ControllerHelper.encodeCursor;
 import static com.robotics.demo.ledger.controller.ControllerHelper.parseAccountId;
+import static com.robotics.demo.ledger.controller.ControllerHelper.parseCursor;
+import static com.robotics.demo.ledger.controller.ControllerHelper.parseLimit;
 
 @RestController
 @RequiredArgsConstructor
@@ -15,12 +17,18 @@ import static com.robotics.demo.ledger.controller.ControllerHelper.parseAccountI
 public class TransactionController {
 
     private final TransactionService transactionService;
+    private final HistoryProperties historyProperties;
 
     @GetMapping("/{accountId}/transactions")
-    public List<TransactionResponse> getTransactions(@PathVariable String accountId) {
+    public TransactionPageResponse getTransactions(@PathVariable String accountId,
+                                                   @RequestParam(required = false) String cursor,
+                                                   @RequestParam(required = false) String limit) {
         Long id = parseAccountId(accountId);
-        return transactionService.getAllTransactions(id).stream()
-                .map(TransactionResponse::from)
-                .toList();
+        Long beforeSeqId = parseCursor(cursor);
+        int pageSize = parseLimit(limit, historyProperties.defaultLimit(), historyProperties.maxLimit());
+        TransactionService.Page page = transactionService.getTransactions(id, beforeSeqId, pageSize);
+        String nextCursor = page.hasMore() ? encodeCursor(page.items().getLast().getSeqId()) : null;
+        return new TransactionPageResponse(
+                page.items().stream().map(TransactionResponse::from).toList(), nextCursor);
     }
 }

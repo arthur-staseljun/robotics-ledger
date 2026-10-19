@@ -25,6 +25,8 @@ public enum ErrorClassification implements ErrorClassifier, Serializable {
     CLIENT_ID_INVALID("auth-ex-01", "Client id has an invalid format", HttpStatus.BAD_REQUEST),
     REQUIRED_IDEMPOTENCY_KEY("idem-ex-00", "Idempotency key is required", HttpStatus.BAD_REQUEST),
     IDEMPOTENCY_KEY_INVALID("idem-ex-01", "Idempotency key must be a UUID", HttpStatus.BAD_REQUEST),
+    CURSOR_INVALID("hist-ex-00", "Cursor is invalid", HttpStatus.BAD_REQUEST),
+    LIMIT_INVALID("hist-ex-01", "Limit is invalid", HttpStatus.BAD_REQUEST),
     IDEMPOTENCY_KEY_REUSED("idem-ex-02", "Idempotency key was already used with a different request",
             HttpStatus.UNPROCESSABLE_ENTITY);
 

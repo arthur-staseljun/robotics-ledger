@@ -6,6 +6,7 @@ import com.robotics.demo.ledger.model.domain.Transaction;
 import com.robotics.demo.ledger.persistence.jpa.TransactionRepository;
 import com.robotics.demo.ledger.persistence.jpa.entity.TransactionEntity;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,12 +21,21 @@ public class TransactionService {
     private final TransactionRepository transactionRepository;
     private final AccountService accountService;
 
+    public record Page(List<Transaction> items, boolean hasMore) {
+    }
+
     @Transactional(readOnly = true)
-    public List<Transaction> getAllTransactions(Long accountId) {
+    public Page getTransactions(Long accountId, Long beforeSeqId, int limit) {
         accountService.getExistingAccount(accountId);
-        return transactionRepository.findByAccountIdOrderBySeqIdDesc(accountId).stream()
+        Limit probe = Limit.of(limit + 1);
+        List<TransactionEntity> found = beforeSeqId == null
+                ? transactionRepository.findByAccountIdOrderBySeqIdDesc(accountId, probe)
+                : transactionRepository.findByAccountIdAndSeqIdLessThanOrderBySeqIdDesc(accountId, beforeSeqId, probe);
+        List<Transaction> items = found.stream()
+                .limit(limit)
                 .map(TransactionService::toDomain)
                 .toList();
+        return new Page(items, found.size() > limit);
     }
 
     public Transaction save(Transaction transaction) {

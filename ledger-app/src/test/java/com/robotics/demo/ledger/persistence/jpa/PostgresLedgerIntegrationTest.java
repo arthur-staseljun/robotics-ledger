@@ -116,7 +116,7 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
         completedTransfer(from, to, eur("4.00"));
         completedTransfer(to, from, eur("1.50"));
 
-        List<Transaction> history = transactionService.getAllTransactions(from);
+        List<Transaction> history = history(from);
 
         assertThat(history).extracting(Transaction::getTransactionType)
                 .containsExactly(TransactionType.DEPOSIT, TransactionType.WITHDRAWAL);
@@ -136,7 +136,7 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
         })).isInstanceOf(IllegalStateException.class);
 
         assertThat(accountService.getExistingAccount(id).getBalance()).isEqualTo(Money.zero(EUR));
-        assertThat(transactionService.getAllTransactions(id)).isEmpty();
+        assertThat(history(id)).isEmpty();
     }
 
     @Test
@@ -150,7 +150,7 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(succeeded).isEqualTo(100);
         assertThat(balanceOf(target)).isEqualTo(10000);
         assertThat(balanceOf(source)).isZero();
-        assertThat(transactionService.getAllTransactions(target)).hasSize(100);
+        assertThat(history(target)).hasSize(100);
     }
 
     private Transfer completedTransfer(Long from, Long to, Money amount) {
@@ -163,6 +163,10 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
         Long ownerId = customerService.createCustomer().getCustomerId();
         return accountService.save(Account.of(null, ownerId, eur(amount), Account.AccountStatus.ACTIVE, 0, now, now))
                 .getId();
+    }
+
+    private List<Transaction> history(Long accountId) {
+        return transactionService.getTransactions(accountId, null, 1000).items();
     }
 
     private long balanceOf(Long accountId) {
@@ -180,8 +184,8 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(transfer.getErrorCode()).isNull();
         assertThat(balanceOf(from)).isEqualTo(7450);
         assertThat(balanceOf(to)).isEqualTo(2550);
-        Transaction withdrawal = transactionService.getAllTransactions(from).getFirst();
-        Transaction deposit = transactionService.getAllTransactions(to).getFirst();
+        Transaction withdrawal = history(from).getFirst();
+        Transaction deposit = history(to).getFirst();
         assertThat(withdrawal.getTransferId()).isEqualTo(transfer.getTransferId());
         assertThat(withdrawal.getTransactionType()).isEqualTo(TransactionType.WITHDRAWAL);
         assertThat(withdrawal.getBalanceAfter()).isEqualTo(eur("74.50"));
@@ -200,9 +204,9 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
         completedTransfer(second, first, eur("0.50"));
         completedTransfer(first, second, eur("2.00"));
 
-        assertThat(transactionService.getAllTransactions(first)).extracting(Transaction::getSeqId)
+        assertThat(history(first)).extracting(Transaction::getSeqId)
                 .containsExactly(3L, 2L, 1L);
-        assertThat(transactionService.getAllTransactions(second)).extracting(Transaction::getSeqId)
+        assertThat(history(second)).extracting(Transaction::getSeqId)
                 .containsExactly(3L, 2L, 1L);
         assertThat(accountService.getExistingAccount(first).getLastSeq()).isEqualTo(3);
         assertThat(accountService.getExistingAccount(second).getLastSeq()).isEqualTo(3);
@@ -311,8 +315,8 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(second.getStatus()).isEqualTo(TransferStatus.SUCCESSFUL);
         assertThat(balanceOf(from)).isEqualTo(600);
         assertThat(balanceOf(to)).isEqualTo(400);
-        assertThat(transactionService.getAllTransactions(from)).hasSize(1);
-        assertThat(transactionService.getAllTransactions(to)).hasSize(1);
+        assertThat(history(from)).hasSize(1);
+        assertThat(history(to)).hasSize(1);
     }
 
     @Test
@@ -376,8 +380,8 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stored.getErrorCode()).isEqualTo(ErrorClassification.INSUFFICIENT_FUNDS.getErrorCode());
         assertThat(balanceOf(from)).isEqualTo(1000);
         assertThat(balanceOf(to)).isZero();
-        assertThat(transactionService.getAllTransactions(to)).isEmpty();
-        assertThat(transactionService.getAllTransactions(from)).isEmpty();
+        assertThat(history(to)).isEmpty();
+        assertThat(history(from)).isEmpty();
     }
 
     @Test
@@ -397,9 +401,9 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(succeeded).isEqualTo(40);
         assertThat(balanceOf(first) + balanceOf(second)).isEqualTo(200000);
         List<Long> expectedSequence = LongStream.rangeClosed(1, 40).boxed().sorted(Comparator.reverseOrder()).toList();
-        assertThat(transactionService.getAllTransactions(first)).extracting(Transaction::getSeqId)
+        assertThat(history(first)).extracting(Transaction::getSeqId)
                 .containsExactlyElementsOf(expectedSequence);
-        assertThat(transactionService.getAllTransactions(second)).extracting(Transaction::getSeqId)
+        assertThat(history(second)).extracting(Transaction::getSeqId)
                 .containsExactlyElementsOf(expectedSequence);
     }
 
@@ -469,5 +473,40 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
                 "select count(*) from outbox where transfer_id = ? and event_type = 'processed' and topic = 'transfer-complete'",
                 Integer.class, transferId);
         assertThat(processedEvents).isEqualTo(1);
+    }
+
+    @Test
+    void pagesWalkThroughTheWholeHistoryWithoutGapsOrRepeats() {
+        Long from = fundedAccount("100.00");
+        Long to = newAccount().getId();
+        for (int i = 0; i < 7; i++) {
+            completedTransfer(from, to, eur("1.00"));
+        }
+
+        List<Long> seen = new ArrayList<>();
+        Long cursor = null;
+        int pages = 0;
+        do {
+            TransactionService.Page page = transactionService.getTransactions(from, cursor, 3);
+            page.items().forEach(transaction -> seen.add(transaction.getSeqId()));
+            cursor = page.hasMore() ? page.items().getLast().getSeqId() : null;
+            pages++;
+        } while (cursor != null);
+
+        assertThat(pages).isEqualTo(3);
+        assertThat(seen).containsExactly(7L, 6L, 5L, 4L, 3L, 2L, 1L);
+    }
+
+    @Test
+    void aFullLastPageHasNoNextCursor() {
+        Long from = fundedAccount("100.00");
+        Long to = newAccount().getId();
+        completedTransfer(from, to, eur("1.00"));
+        completedTransfer(from, to, eur("1.00"));
+
+        TransactionService.Page page = transactionService.getTransactions(from, null, 2);
+
+        assertThat(page.items()).hasSize(2);
+        assertThat(page.hasMore()).isFalse();
     }
 }

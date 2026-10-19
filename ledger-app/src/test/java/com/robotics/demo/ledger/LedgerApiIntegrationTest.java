@@ -246,7 +246,7 @@ class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
 
         mockMvc.perform(authorizedGet("/api/accounts/{id}/transactions", accountId))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$", hasSize(0)));
+                .andExpect(jsonPath("$.items", hasSize(0)));
     }
 
     @Test
@@ -360,14 +360,14 @@ class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
         mockMvc.perform(authorizedGet("/api/accounts/{id}", to))
                 .andExpect(jsonPath("$.balance").value(25.50));
         mockMvc.perform(authorizedGet("/api/accounts/{id}/transactions", from))
-                .andExpect(jsonPath("$[0].transactionType").value("WITHDRAWAL"))
-                .andExpect(jsonPath("$[0].transferId").value(transferId))
-                .andExpect(jsonPath("$[0].seqId").value(1))
-                .andExpect(jsonPath("$[0].balanceAfter").value(74.50));
+                .andExpect(jsonPath("$.items[0].transactionType").value("WITHDRAWAL"))
+                .andExpect(jsonPath("$.items[0].transferId").value(transferId))
+                .andExpect(jsonPath("$.items[0].seqId").value(1))
+                .andExpect(jsonPath("$.items[0].balanceAfter").value(74.50));
         mockMvc.perform(authorizedGet("/api/accounts/{id}/transactions", to))
-                .andExpect(jsonPath("$", hasSize(1)))
-                .andExpect(jsonPath("$[0].transactionType").value("DEPOSIT"))
-                .andExpect(jsonPath("$[0].transferId").value(transferId));
+                .andExpect(jsonPath("$.items", hasSize(1)))
+                .andExpect(jsonPath("$.items[0].transactionType").value("DEPOSIT"))
+                .andExpect(jsonPath("$.items[0].transferId").value(transferId));
         mockMvc.perform(authorizedGet("/api/transfers/{id}", transferId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("SUCCESSFUL"));
@@ -470,7 +470,7 @@ class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
         mockMvc.perform(authorizedGet("/api/accounts/{id}", from))
                 .andExpect(jsonPath("$.balance").value(10.00));
         mockMvc.perform(authorizedGet("/api/accounts/{id}/transactions", to))
-                .andExpect(jsonPath("$", hasSize(0)));
+                .andExpect(jsonPath("$.items", hasSize(0)));
     }
 
     @Test
@@ -608,5 +608,50 @@ class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
                         .content("{}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorCode").value("idem-ex-00"));
+    }
+
+    @Test
+    void transactionsArePagedNewestFirstWithAnOpaqueCursor() throws Exception {
+        long from = fundedAccount("100.00");
+        long to = createAccount();
+        for (int i = 0; i < 5; i++) {
+            transferService.process(acceptTransfer(from, to, "1.00"));
+        }
+
+        String firstBody = mockMvc.perform(authorizedGet("/api/accounts/{id}/transactions?limit=2", from))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items", hasSize(2)))
+                .andExpect(jsonPath("$.items[0].seqId").value(5))
+                .andExpect(jsonPath("$.items[1].seqId").value(4))
+                .andExpect(jsonPath("$.nextCursor").isNotEmpty())
+                .andReturn().getResponse().getContentAsString();
+        String cursor = objectMapper.readTree(firstBody).get("nextCursor").asText();
+
+        String secondBody = mockMvc.perform(authorizedGet("/api/accounts/{id}/transactions?limit=2&cursor={c}", from, cursor))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].seqId").value(3))
+                .andExpect(jsonPath("$.items[1].seqId").value(2))
+                .andReturn().getResponse().getContentAsString();
+        String lastCursor = objectMapper.readTree(secondBody).get("nextCursor").asText();
+
+        mockMvc.perform(authorizedGet("/api/accounts/{id}/transactions?limit=2&cursor={c}", from, lastCursor))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items", hasSize(1)))
+                .andExpect(jsonPath("$.items[0].seqId").value(1))
+                .andExpect(jsonPath("$.nextCursor").doesNotExist());
+    }
+
+    @Test
+    void invalidCursorOrLimitReturns400() throws Exception {
+        long accountId = createAccount();
+
+        mockMvc.perform(authorizedGet("/api/accounts/{id}/transactions?cursor=%%%", accountId))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("hist-ex-00"));
+        for (String invalid : new String[]{"0", "-1", "abc", "101"}) {
+            mockMvc.perform(authorizedGet("/api/accounts/{id}/transactions?limit={l}", accountId, invalid))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errorCode").value("hist-ex-01"));
+        }
     }
 }
