@@ -1,12 +1,14 @@
 package com.robotics.demo.ledger.controller;
 
-import com.robotics.demo.ledger.exception.classification.ErrorClassification;
-import com.robotics.demo.ledger.exception.classification.LedgerServiceException;
-import com.robotics.demo.ledger.model.Account;
+import com.robotics.demo.ledger.interceptor.ApiHeaders;
+import com.robotics.demo.ledger.model.response.AccountResponse;
 import com.robotics.demo.ledger.model.request.CreateAccountRequest;
 import com.robotics.demo.ledger.service.AccountService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
+
+import static com.robotics.demo.ledger.controller.ControllerHelper.parseAccountId;
+import static com.robotics.demo.ledger.controller.ControllerHelper.parseIdempotencyKey;
 
 @RestController
 @RequestMapping("/api/accounts")
@@ -16,20 +18,15 @@ public class AccountController {
     private final AccountService accountService;
 
     @PostMapping
-    public Account createAccount(@RequestBody CreateAccountRequest request) {
-        return accountService.createAccount(request.toOwnerId());
+    public AccountResponse createAccount(@RequestHeader(ApiHeaders.CLIENT_ID) String clientId,
+                                         @RequestHeader(ApiHeaders.IDEMPOTENCY_KEY) String idempotencyKey,
+                                         @RequestBody CreateAccountRequest request) {
+        return accountService.createAccount(clientId, parseIdempotencyKey(idempotencyKey), request.getOwnerId());
     }
 
     @GetMapping("/{accountId}")
-    public Account getAccount(@PathVariable String accountId) {
-        return accountService.getExistingAccount(parse(accountId));
-    }
-
-    private Long parse(String accountId) {
-        try {
-            return Long.parseLong(accountId);
-        } catch (NumberFormatException ex) {
-            throw new LedgerServiceException(ErrorClassification.ACCOUNT_ID_PARSE_ERROR);
-        }
+    public AccountResponse getAccount(@PathVariable String accountId) {
+        return AccountResponse.from(accountService.getExistingAccount(
+                parseAccountId(accountId)));
     }
 }

@@ -1,7 +1,7 @@
 package com.robotics.demo.ledger.persistence.jpa.entity;
 
 import jakarta.persistence.Column;
-import com.robotics.demo.ledger.model.Account.AccountStatus;
+import com.robotics.demo.ledger.model.domain.Account.AccountStatus;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;

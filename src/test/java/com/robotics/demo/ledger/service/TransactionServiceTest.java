@@ -2,8 +2,8 @@ package com.robotics.demo.ledger.service;
 
 import com.robotics.demo.ledger.exception.classification.ErrorClassification;
 import com.robotics.demo.ledger.exception.classification.LedgerServiceException;
-import com.robotics.demo.ledger.model.Account;
-import com.robotics.demo.ledger.model.Transaction;
+import com.robotics.demo.ledger.model.domain.Account;
+import com.robotics.demo.ledger.model.domain.Transaction;
 import com.robotics.demo.ledger.persistence.jpa.TransactionRepository;
 import com.robotics.demo.ledger.persistence.jpa.entity.TransactionEntity;
 import org.junit.jupiter.api.BeforeEach;

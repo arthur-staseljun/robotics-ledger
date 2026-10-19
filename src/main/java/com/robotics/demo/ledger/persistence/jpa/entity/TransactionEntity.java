@@ -1,6 +1,6 @@
 package com.robotics.demo.ledger.persistence.jpa.entity;
 
-import com.robotics.demo.ledger.model.Transaction.TransactionType;
+import com.robotics.demo.ledger.model.domain.Transaction.TransactionType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;

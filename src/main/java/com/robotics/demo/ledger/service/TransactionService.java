@@ -1,7 +1,7 @@
 package com.robotics.demo.ledger.service;
 
-import com.robotics.demo.ledger.model.Money;
-import com.robotics.demo.ledger.model.Transaction;
+import com.robotics.demo.ledger.model.domain.Money;
+import com.robotics.demo.ledger.model.domain.Transaction;
 import com.robotics.demo.ledger.persistence.jpa.TransactionRepository;
 import com.robotics.demo.ledger.persistence.jpa.entity.TransactionEntity;
 import lombok.RequiredArgsConstructor;

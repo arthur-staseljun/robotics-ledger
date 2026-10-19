@@ -1,14 +1,12 @@
-package com.robotics.demo.ledger.model;
+package com.robotics.demo.ledger.model.domain;
 
 import lombok.Getter;
-import lombok.Setter;
 
 import java.time.Instant;
 
 @Getter
 public class Customer {
 
-    @Setter
     private Long customerId;
     private final Instant createdAt;
 

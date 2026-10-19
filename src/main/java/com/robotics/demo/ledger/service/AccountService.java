@@ -2,8 +2,9 @@ package com.robotics.demo.ledger.service;
 
 import com.robotics.demo.ledger.exception.classification.ErrorClassification;
 import com.robotics.demo.ledger.exception.classification.LedgerServiceException;
-import com.robotics.demo.ledger.model.Account;
-import com.robotics.demo.ledger.model.Money;
+import com.robotics.demo.ledger.model.domain.Account;
+import com.robotics.demo.ledger.model.domain.Money;
+import com.robotics.demo.ledger.model.response.AccountResponse;
 import com.robotics.demo.ledger.persistence.jpa.AccountRepository;
 import com.robotics.demo.ledger.persistence.jpa.CustomerRepository;
 import com.robotics.demo.ledger.persistence.jpa.entity.AccountEntity;
@@ -13,13 +14,29 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Currency;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
 public class AccountService {
 
+    public static final String ACCOUNTS_REQUEST = "accounts";
+
     private final AccountRepository accountRepository;
     private final CustomerRepository customerRepository;
+    private final IdempotencyService idempotencyService;
+
+    @Transactional
+    public AccountResponse createAccount(String clientId, UUID idempotencyKey, Long ownerId) {
+        IdempotencyService.KeyClaim claim = idempotencyService.claim(clientId, idempotencyKey,
+                IdempotencyService.hash(ACCOUNTS_REQUEST, String.valueOf(ownerId)));
+        if (!claim.isNew()) {
+            return idempotencyService.storedResponse(claim, AccountResponse.class);
+        }
+        AccountResponse response = AccountResponse.from(createAccount(ownerId));
+        idempotencyService.storeResponse(claim, response);
+        return response;
+    }
 
     public Account createAccount(Long ownerId) {
         customerRepository.findById(ownerId)

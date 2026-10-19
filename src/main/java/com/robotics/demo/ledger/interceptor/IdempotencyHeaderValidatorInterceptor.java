@@ -10,24 +10,28 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.servlet.HandlerInterceptor;
 
+import java.util.regex.Pattern;
+
 @Component
 public class IdempotencyHeaderValidatorInterceptor implements HandlerInterceptor {
 
-    private static final String HEADER_CLIENT_ID = "X-Client-Id";
-    private static final String HEADER_IDEMPOTENCY_KEY = "X-Idempotency-Key";
+    private static final Pattern CLIENT_ID_FORMAT = Pattern.compile("[A-Za-z0-9._-]{1," + ApiHeaders.CLIENT_ID_MAX_LENGTH + "}");
     private static final String MDC_CLIENT_ID = "clientId";
     private static final String MDC_IDEMPOTENCY_KEY = "idempotencyKey";
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
-        String clientId = request.getHeader(HEADER_CLIENT_ID);
+        String clientId = request.getHeader(ApiHeaders.CLIENT_ID);
         if (!StringUtils.hasText(clientId)) {
             throw new LedgerServiceException(ErrorClassification.REQUIRED_CLIENT_ID);
+        }
+        if (!CLIENT_ID_FORMAT.matcher(clientId).matches()) {
+            throw new LedgerServiceException(ErrorClassification.CLIENT_ID_INVALID);
         }
         MDC.put(MDC_CLIENT_ID, clientId);
 
         if (HttpMethod.POST.matches(request.getMethod())) {
-            String idempotencyKey = request.getHeader(HEADER_IDEMPOTENCY_KEY);
+            String idempotencyKey = request.getHeader(ApiHeaders.IDEMPOTENCY_KEY);
             if (!StringUtils.hasText(idempotencyKey)) {
                 throw new LedgerServiceException(ErrorClassification.REQUIRED_IDEMPOTENCY_KEY);
             }

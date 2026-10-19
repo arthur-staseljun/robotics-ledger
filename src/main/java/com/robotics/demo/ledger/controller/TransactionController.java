@@ -1,13 +1,13 @@
 package com.robotics.demo.ledger.controller;
 
-import com.robotics.demo.ledger.exception.classification.ErrorClassification;
-import com.robotics.demo.ledger.exception.classification.LedgerServiceException;
-import com.robotics.demo.ledger.model.Transaction;
+import com.robotics.demo.ledger.model.response.TransactionResponse;
 import com.robotics.demo.ledger.service.TransactionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+
+import static com.robotics.demo.ledger.controller.ControllerHelper.parseAccountId;
 
 @RestController
 @RequiredArgsConstructor
@@ -17,15 +17,10 @@ public class TransactionController {
     private final TransactionService transactionService;
 
     @GetMapping("/{accountId}/transactions")
-    public List<Transaction> getTransactions(@PathVariable String accountId) {
-        return transactionService.getAllTransactions(parse(accountId));
-    }
-
-    private Long parse(String accountId) {
-        try {
-            return Long.parseLong(accountId);
-        } catch (NumberFormatException ex) {
-            throw new LedgerServiceException(ErrorClassification.ACCOUNT_ID_PARSE_ERROR);
-        }
+    public List<TransactionResponse> getTransactions(@PathVariable String accountId) {
+        Long id = parseAccountId(accountId);
+        return transactionService.getAllTransactions(id).stream()
+                .map(TransactionResponse::from)
+                .toList();
     }
 }

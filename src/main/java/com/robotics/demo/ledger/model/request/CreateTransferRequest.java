@@ -2,27 +2,25 @@ package com.robotics.demo.ledger.model.request;
 
 import com.robotics.demo.ledger.exception.classification.ErrorClassification;
 import com.robotics.demo.ledger.exception.classification.LedgerServiceException;
-import com.robotics.demo.ledger.model.Money;
+import com.robotics.demo.ledger.model.domain.Money;
 
 import java.math.BigDecimal;
 import java.util.Currency;
 
 public record CreateTransferRequest(String accountFrom, String accountTo,
-                                       String amount, String currency) {
-
-    private static final Currency DEFAULT_CURRENCY = Currency.getInstance("EUR");
+                                    String amount, String currency) {
 
     public Money toMoney() {
-        BigDecimal decimalAmount = parseAmount();
-        Currency parsedCurrency = parseCurrency();
+        BigDecimal amount = getAmount();
+        Currency currency = getCurrency();
         try {
-            return Money.of(decimalAmount, parsedCurrency);
+            return Money.of(amount, currency);
         } catch (ArithmeticException ex) {
             throw new LedgerServiceException(ErrorClassification.AMOUNT_PARSE_ERROR);
         }
     }
 
-    private BigDecimal parseAmount() {
+    private BigDecimal getAmount() {
         if (amount == null || amount.isBlank()) {
             throw new LedgerServiceException(ErrorClassification.AMOUNT_PARSE_ERROR);
         }
@@ -33,9 +31,9 @@ public record CreateTransferRequest(String accountFrom, String accountTo,
         }
     }
 
-    private Currency parseCurrency() {
+    private Currency getCurrency() {
         if (currency == null || currency.isBlank()) {
-            return DEFAULT_CURRENCY;
+            return Money.DEFAULT_CURRENCY;
         }
         try {
             return Currency.getInstance(currency.toUpperCase());

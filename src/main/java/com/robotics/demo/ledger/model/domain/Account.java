@@ -1,9 +1,8 @@
-package com.robotics.demo.ledger.model;
+package com.robotics.demo.ledger.model.domain;
 
 import com.robotics.demo.ledger.exception.classification.ErrorClassification;
 import com.robotics.demo.ledger.exception.classification.LedgerServiceException;
 import lombok.Getter;
-import lombok.Setter;
 
 import java.time.Instant;
 import java.util.Currency;
@@ -11,17 +10,12 @@ import java.util.Currency;
 @Getter
 public class Account {
 
-    private static final Currency DEFAULT_CURRENCY = Currency.getInstance("EUR");
-
-    @Setter
     private Long id;
     private Long ownerId;
-    @Setter
     private Money balance;
     private AccountStatus status;
     private long lastSeq;
     private Instant createdAt;
-    @Setter
     private Instant updatedAt;
 
     public enum AccountStatus {
@@ -32,20 +26,10 @@ public class Account {
 
     public Account(Long id) {
         this.id = id;
-        this.balance = Money.zero(DEFAULT_CURRENCY);
+        this.balance = Money.zero(Money.DEFAULT_CURRENCY);
         this.status = AccountStatus.ACTIVE;
         this.createdAt = Instant.now();
         this.updatedAt = Instant.now();
-    }
-
-    private Account(Account other) {
-        this.id = other.id;
-        this.ownerId = other.ownerId;
-        this.balance = other.balance;
-        this.status = other.status;
-        this.lastSeq = other.lastSeq;
-        this.createdAt = other.createdAt;
-        this.updatedAt = other.updatedAt;
     }
 
     public static Account openFor(Long ownerId) {
@@ -88,9 +72,5 @@ public class Account {
 
     public Currency getCurrency() {
         return balance.currency();
-    }
-
-    public Account copy() {
-        return new Account(this);
     }
 }

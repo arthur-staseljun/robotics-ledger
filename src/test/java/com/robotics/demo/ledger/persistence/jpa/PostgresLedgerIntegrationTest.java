@@ -3,12 +3,12 @@ package com.robotics.demo.ledger.persistence.jpa;
 import com.robotics.demo.ledger.AbstractPostgresIntegrationTest;
 import com.robotics.demo.ledger.exception.classification.ErrorClassification;
 import com.robotics.demo.ledger.exception.classification.LedgerServiceException;
-import com.robotics.demo.ledger.model.Account;
-import com.robotics.demo.ledger.model.Money;
-import com.robotics.demo.ledger.model.Transaction;
-import com.robotics.demo.ledger.model.Transaction.TransactionType;
-import com.robotics.demo.ledger.model.Transfer;
-import com.robotics.demo.ledger.model.Transfer.TransferStatus;
+import com.robotics.demo.ledger.model.domain.Account;
+import com.robotics.demo.ledger.model.domain.Money;
+import com.robotics.demo.ledger.model.domain.Transaction;
+import com.robotics.demo.ledger.model.domain.Transaction.TransactionType;
+import com.robotics.demo.ledger.model.domain.Transfer;
+import com.robotics.demo.ledger.model.domain.Transfer.TransferStatus;
 import com.robotics.demo.ledger.service.AccountService;
 import com.robotics.demo.ledger.service.CustomerService;
 import com.robotics.demo.ledger.service.TransactionService;
@@ -25,9 +25,11 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.Currency;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -101,7 +103,7 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
                 .isInstanceOf(LedgerServiceException.class)
                 .extracting("errorClassification")
                 .isEqualTo(ErrorClassification.ACCOUNT_DOES_NOT_EXIST);
-        assertThatThrownBy(() -> transferService.createTransfer(newAccount().getId(), -1L, eur("1.00")))
+        assertThatThrownBy(() -> completedTransfer(newAccount().getId(), -1L, eur("1.00")))
                 .isInstanceOf(LedgerServiceException.class)
                 .extracting("errorClassification")
                 .isEqualTo(ErrorClassification.ACCOUNT_DOES_NOT_EXIST);
@@ -111,8 +113,8 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
     void storesTransactionsNewestFirst() {
         Long from = fundedAccount("10.00");
         Long to = newAccount().getId();
-        transferService.createTransfer(from, to, eur("4.00"));
-        transferService.createTransfer(to, from, eur("1.50"));
+        completedTransfer(from, to, eur("4.00"));
+        completedTransfer(to, from, eur("1.50"));
 
         List<Transaction> history = transactionService.getAllTransactions(from);
 
@@ -143,12 +145,17 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
         Long source = fundedAccount("100.00");
 
         int succeeded = runInParallel(100, () ->
-                transferService.createTransfer(source, target, eur("1.00")).getStatus() == TransferStatus.SUCCESSFUL);
+                completedTransfer(source, target, eur("1.00")).getStatus() == TransferStatus.SUCCESSFUL);
 
         assertThat(succeeded).isEqualTo(100);
         assertThat(balanceOf(target)).isEqualTo(10000);
         assertThat(balanceOf(source)).isZero();
         assertThat(transactionService.getAllTransactions(target)).hasSize(100);
+    }
+
+    private Transfer completedTransfer(Long from, Long to, Money amount) {
+        TransferService.AcceptedTransfer accepted = transferService.accept("test-client", UUID.randomUUID(), from, to, amount);
+        return transferService.process(accepted.transfer().getTransferId());
     }
 
     private Long fundedAccount(String amount) {
@@ -167,7 +174,7 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
         Long from = fundedAccount("100.00");
         Long to = newAccount().getId();
 
-        Transfer transfer = transferService.createTransfer(from, to, eur("25.50"));
+        Transfer transfer = completedTransfer(from, to, eur("25.50"));
 
         assertThat(transfer.getStatus()).isEqualTo(TransferStatus.SUCCESSFUL);
         assertThat(transfer.getErrorCode()).isNull();
@@ -189,9 +196,9 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
     void sequenceNumbersOfAnAccountGrowByOnePerEntryAndFollowLastSeq() {
         Long first = fundedAccount("100.00");
         Long second = newAccount().getId();
-        transferService.createTransfer(first, second, eur("1.00"));
-        transferService.createTransfer(second, first, eur("0.50"));
-        transferService.createTransfer(first, second, eur("2.00"));
+        completedTransfer(first, second, eur("1.00"));
+        completedTransfer(second, first, eur("0.50"));
+        completedTransfer(first, second, eur("2.00"));
 
         assertThat(transactionService.getAllTransactions(first)).extracting(Transaction::getSeqId)
                 .containsExactly(3L, 2L, 1L);
@@ -201,12 +208,119 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(accountService.getExistingAccount(second).getLastSeq()).isEqualTo(3);
     }
 
+    private int countRows(String table, String column, Long value) {
+        return jdbcTemplate.queryForObject("select count(*) from " + table + " where " + column + " = ?",
+                Integer.class, value);
+    }
+
+    @Test
+    void acceptedTransferStaysPendingWithAnOutboxEventAndAKeyRecord() {
+        Long from = fundedAccount("10.00");
+        Long to = newAccount().getId();
+        UUID key = UUID.randomUUID();
+
+        TransferService.AcceptedTransfer accepted = transferService.accept("test-client", key, from, to, eur("1.00"));
+
+        Long transferId = accepted.transfer().getTransferId();
+        assertThat(accepted.replayed()).isFalse();
+        assertThat(accepted.transfer().getStatus()).isEqualTo(TransferStatus.PENDING);
+        assertThat(balanceOf(from)).isEqualTo(1000);
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from outbox where transfer_id = ? and event_type = 'created' and sent_at is null",
+                Integer.class, transferId)).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+                "select transfer_id from idempotency_keys where client_id = ? and idempotency_key = ?",
+                Long.class, "test-client", key)).isEqualTo(transferId);
+    }
+
+    @Test
+    void repeatedAcceptWithTheSameKeyDoesNotCreateAnotherTransfer() {
+        Long from = fundedAccount("10.00");
+        Long to = newAccount().getId();
+        UUID key = UUID.randomUUID();
+
+        TransferService.AcceptedTransfer first = transferService.accept("test-client", key, from, to, eur("1.00"));
+        TransferService.AcceptedTransfer second = transferService.accept("test-client", key, from, to, eur("1.00"));
+
+        assertThat(second.replayed()).isTrue();
+        assertThat(second.transfer().getTransferId()).isEqualTo(first.transfer().getTransferId());
+        assertThat(countRows("transfers", "account_from", from)).isEqualTo(1);
+        assertThat(countRows("outbox", "account_id", from)).isEqualTo(1);
+    }
+
+    @Test
+    void sameKeyWithAnotherRequestIsRejected() {
+        Long from = fundedAccount("10.00");
+        Long to = newAccount().getId();
+        UUID key = UUID.randomUUID();
+        transferService.accept("test-client", key, from, to, eur("1.00"));
+
+        assertThatThrownBy(() -> transferService.accept("test-client", key, from, to, eur("2.00")))
+                .isInstanceOf(LedgerServiceException.class)
+                .extracting("errorClassification")
+                .isEqualTo(ErrorClassification.IDEMPOTENCY_KEY_REUSED);
+        assertThat(countRows("transfers", "account_from", from)).isEqualTo(1);
+    }
+
+    @Test
+    void parallelRequestsWithTheSameKeyCreateExactlyOneTransfer() throws Exception {
+        Long from = fundedAccount("10.00");
+        Long to = newAccount().getId();
+        UUID key = UUID.randomUUID();
+        List<Long> transferIds = Collections.synchronizedList(new ArrayList<>());
+
+        int accepted = runInParallel(10, () -> {
+            transferIds.add(transferService.accept("test-client", key, from, to, eur("1.00"))
+                    .transfer().getTransferId());
+            return true;
+        });
+
+        assertThat(accepted).isEqualTo(10);
+        assertThat(transferIds).hasSize(10).containsOnly(transferIds.getFirst());
+        assertThat(countRows("transfers", "account_from", from)).isEqualTo(1);
+        assertThat(countRows("outbox", "account_id", from)).isEqualTo(1);
+    }
+
+    @Test
+    void parallelCustomerCreationsWithTheSameKeyCreateExactlyOneCustomer() throws Exception {
+        int before = jdbcTemplate.queryForObject("select count(*) from customers", Integer.class);
+        UUID key = UUID.randomUUID();
+        List<Long> customerIds = Collections.synchronizedList(new ArrayList<>());
+
+        int done = runInParallel(10, () -> {
+            customerIds.add(customerService.createCustomer("test-client", key).customerId());
+            return true;
+        });
+
+        assertThat(done).isEqualTo(10);
+        assertThat(customerIds).hasSize(10).containsOnly(customerIds.getFirst());
+        assertThat(jdbcTemplate.queryForObject("select count(*) from customers", Integer.class))
+                .isEqualTo(before + 1);
+    }
+
+    @Test
+    void processingTheSameTransferTwiceMovesTheMoneyOnce() {
+        Long from = fundedAccount("10.00");
+        Long to = newAccount().getId();
+        TransferService.AcceptedTransfer accepted = transferService.accept("test-client", UUID.randomUUID(), from, to, eur("4.00"));
+        Long transferId = accepted.transfer().getTransferId();
+
+        transferService.process(transferId);
+        Transfer second = transferService.process(transferId);
+
+        assertThat(second.getStatus()).isEqualTo(TransferStatus.SUCCESSFUL);
+        assertThat(balanceOf(from)).isEqualTo(600);
+        assertThat(balanceOf(to)).isEqualTo(400);
+        assertThat(transactionService.getAllTransactions(from)).hasSize(1);
+        assertThat(transactionService.getAllTransactions(to)).hasSize(1);
+    }
+
     @Test
     void transferRecordsTheOwnerOfTheSourceAccount() {
         Long from = fundedAccount("10.00");
         Long to = newAccount().getId();
 
-        Transfer transfer = transferService.createTransfer(from, to, eur("1.00"));
+        Transfer transfer = completedTransfer(from, to, eur("1.00"));
 
         assertThat(transfer.getOwnerId()).isEqualTo(accountService.getExistingAccount(from).getOwnerId());
     }
@@ -219,7 +333,7 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
                 now, now)).getId();
         Long to = newAccount().getId();
 
-        Transfer transfer = transferService.createTransfer(frozen, to, eur("1.00"));
+        Transfer transfer = completedTransfer(frozen, to, eur("1.00"));
 
         assertThat(transfer.getStatus()).isEqualTo(TransferStatus.FAILED);
         assertThat(transfer.getErrorCode()).isEqualTo(ErrorClassification.ACCOUNT_NOT_ACTIVE.getErrorCode());
@@ -230,7 +344,7 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
     void transactionsCannotBeUpdatedOrDeleted() {
         Long from = fundedAccount("10.00");
         Long to = newAccount().getId();
-        transferService.createTransfer(from, to, eur("1.00"));
+        completedTransfer(from, to, eur("1.00"));
 
         assertThatThrownBy(() -> jdbcTemplate.update("update transactions set amount = 0 where account_id = ?", from))
                 .hasMessageContaining("append-only");
@@ -255,7 +369,7 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
         Long from = fundedAccount("10.00");
         Long to = newAccount().getId();
 
-        Transfer transfer = transferService.createTransfer(from, to, eur("10.01"));
+        Transfer transfer = completedTransfer(from, to, eur("10.01"));
 
         Transfer stored = transferService.getTransfer(transfer.getTransferId());
         assertThat(stored.getStatus()).isEqualTo(TransferStatus.FAILED);
@@ -275,8 +389,8 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
         int succeeded = runInParallel(40, () -> {
             boolean forward = direction.getAndIncrement() % 2 == 0;
             Transfer transfer = forward
-                    ? transferService.createTransfer(first, second, eur("1.00"))
-                    : transferService.createTransfer(second, first, eur("1.00"));
+                    ? completedTransfer(first, second, eur("1.00"))
+                    : completedTransfer(second, first, eur("1.00"));
             return transfer.getStatus() == TransferStatus.SUCCESSFUL;
         });
 
@@ -297,7 +411,7 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
 
         int succeeded = runInParallel(30, () -> {
             Long target = targets.get(next.getAndIncrement() % targets.size());
-            return transferService.createTransfer(from, target, eur("1.00")).getStatus() == TransferStatus.SUCCESSFUL;
+            return completedTransfer(from, target, eur("1.00")).getStatus() == TransferStatus.SUCCESSFUL;
         });
 
         assertThat(succeeded).isEqualTo(10);

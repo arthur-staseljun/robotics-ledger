@@ -1,7 +1,6 @@
-package com.robotics.demo.ledger.model;
+package com.robotics.demo.ledger.model.domain;
 
 import lombok.Getter;
-import lombok.Setter;
 
 import java.time.Instant;
 
@@ -14,7 +13,6 @@ public class Transaction {
     private final TransactionType transactionType;
     private final Money amount;
     private final Money balanceAfter;
-    @Setter
     private Instant createdAt;
 
     public Transaction(Long accountId, Long transferId, long seqId, Money amount, Money balanceAfter) {

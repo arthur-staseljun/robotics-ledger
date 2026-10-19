@@ -1,8 +1,7 @@
-package com.robotics.demo.ledger.model;
+package com.robotics.demo.ledger.model.domain;
 
 import com.robotics.demo.ledger.exception.classification.ErrorClassification;
 import lombok.Getter;
-import lombok.Setter;
 
 import java.time.Instant;
 import java.util.Currency;
@@ -10,7 +9,6 @@ import java.util.Currency;
 @Getter
 public class Transfer {
 
-    @Setter
     private Long transferId;
     private final Long ownerId;
     private final Long accountFrom;
@@ -63,10 +61,5 @@ public class Transfer {
         status = TransferStatus.FAILED;
         errorCode = classification.getErrorCode();
         updatedAt = Instant.now();
-    }
-
-    public Transfer copy() {
-        return new Transfer(transferId, ownerId, accountFrom, accountTo, amount, status, errorCode, createdAt,
-                updatedAt);
     }
 }

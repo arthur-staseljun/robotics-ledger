@@ -2,9 +2,11 @@ package com.robotics.demo.ledger;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import com.robotics.demo.ledger.model.Account;
-import com.robotics.demo.ledger.model.Money;
+import com.robotics.demo.ledger.interceptor.ApiHeaders;
+import com.robotics.demo.ledger.model.domain.Account;
+import com.robotics.demo.ledger.model.domain.Money;
 import com.robotics.demo.ledger.service.AccountService;
+import com.robotics.demo.ledger.service.TransferService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -18,6 +20,7 @@ import java.time.Instant;
 import java.util.Currency;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -31,8 +34,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final String TEST_CLIENT_ID = "test-client";
-    private static final String HEADER_CLIENT_ID = "X-Client-Id";
-    private static final String HEADER_IDEMPOTENCY_KEY = "X-Idempotency-Key";
 
     @Autowired
     private MockMvc mockMvc;
@@ -43,18 +44,21 @@ class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
     @Autowired
     private AccountService accountService;
 
+    @Autowired
+    private TransferService transferService;
+
     private MockHttpServletRequestBuilder authorizedPost(String urlTemplate, Object... uriVariables) {
         return post(urlTemplate, uriVariables)
-                .header(HEADER_CLIENT_ID, TEST_CLIENT_ID)
-                .header(HEADER_IDEMPOTENCY_KEY, UUID.randomUUID().toString());
+                .header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID)
+                .header(ApiHeaders.IDEMPOTENCY_KEY, UUID.randomUUID().toString());
     }
 
     private MockHttpServletRequestBuilder authorizedGet(String urlTemplate, Object... uriVariables) {
-        return get(urlTemplate, uriVariables).header(HEADER_CLIENT_ID, TEST_CLIENT_ID);
+        return get(urlTemplate, uriVariables).header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID);
     }
 
     private MockHttpServletRequestBuilder authorizedDelete(String urlTemplate, Object... uriVariables) {
-        return delete(urlTemplate, uriVariables).header(HEADER_CLIENT_ID, TEST_CLIENT_ID);
+        return delete(urlTemplate, uriVariables).header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID);
     }
 
     private long createCustomer() throws Exception {
@@ -98,6 +102,87 @@ class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
         mockMvc.perform(authorizedGet("/api/customers/abc"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorCode").value("cus-ex-00"));
+    }
+
+    @Test
+    void repeatedCustomerCreationWithTheSameKeyReturnsTheSameCustomer() throws Exception {
+        String key = UUID.randomUUID().toString();
+
+        String first = mockMvc.perform(post("/api/customers")
+                        .header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID)
+                        .header(ApiHeaders.IDEMPOTENCY_KEY, key))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String second = mockMvc.perform(post("/api/customers")
+                        .header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID)
+                        .header(ApiHeaders.IDEMPOTENCY_KEY, key))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(objectMapper.readTree(second)).isEqualTo(objectMapper.readTree(first));
+    }
+
+    @Test
+    void repeatedAccountCreationWithTheSameKeyReturnsTheSameAccount() throws Exception {
+        long ownerId = createCustomer();
+        String key = UUID.randomUUID().toString();
+        String body = "{\"ownerId\": \"" + ownerId + "\"}";
+
+        String first = mockMvc.perform(post("/api/accounts")
+                        .header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID)
+                        .header(ApiHeaders.IDEMPOTENCY_KEY, key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String second = mockMvc.perform(post("/api/accounts")
+                        .header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID)
+                        .header(ApiHeaders.IDEMPOTENCY_KEY, key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(objectMapper.readTree(second)).isEqualTo(objectMapper.readTree(first));
+    }
+
+    @Test
+    void accountCreationWithTheSameKeyAndAnotherOwnerReturns422() throws Exception {
+        long firstOwner = createCustomer();
+        long secondOwner = createCustomer();
+        String key = UUID.randomUUID().toString();
+        mockMvc.perform(post("/api/accounts")
+                        .header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID)
+                        .header(ApiHeaders.IDEMPOTENCY_KEY, key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ownerId\": \"" + firstOwner + "\"}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/accounts")
+                        .header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID)
+                        .header(ApiHeaders.IDEMPOTENCY_KEY, key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ownerId\": \"" + secondOwner + "\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.errorCode").value("idem-ex-02"));
+    }
+
+    @Test
+    void oneKeyCannotBeReusedForAnotherKindOfRequest() throws Exception {
+        String key = UUID.randomUUID().toString();
+        long ownerId = createCustomer();
+        mockMvc.perform(post("/api/customers")
+                        .header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID)
+                        .header(ApiHeaders.IDEMPOTENCY_KEY, key))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/accounts")
+                        .header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID)
+                        .header(ApiHeaders.IDEMPOTENCY_KEY, key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ownerId\": \"" + ownerId + "\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.errorCode").value("idem-ex-02"));
     }
 
     @Test
@@ -176,13 +261,26 @@ class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void malformedJsonBodyReturns400WithProblemDetail() throws Exception {
-        long accountId = createAccount();
-
         mockMvc.perform(authorizedPost("/api/transfers")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("not json"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorCode").doesNotExist());
+    }
+
+    @Test
+    void clientIdWithAnInvalidFormatReturns400() throws Exception {
+        for (String invalid : new String[]{"has space", "semi;colon", "кириллица", "c".repeat(ApiHeaders.CLIENT_ID_MAX_LENGTH + 1)}) {
+            mockMvc.perform(get("/api/accounts/1").header(ApiHeaders.CLIENT_ID, invalid))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errorCode").value("auth-ex-01"));
+        }
+    }
+
+    @Test
+    void clientIdOfTheMaximumLengthIsAccepted() throws Exception {
+        mockMvc.perform(get("/api/accounts/999999").header(ApiHeaders.CLIENT_ID, "c".repeat(ApiHeaders.CLIENT_ID_MAX_LENGTH)))
+                .andExpect(status().isNotFound());
     }
 
     @Test
@@ -194,7 +292,7 @@ class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void postWithoutIdempotencyKeyReturns400() throws Exception {
-        mockMvc.perform(post("/api/accounts").header(HEADER_CLIENT_ID, TEST_CLIENT_ID))
+        mockMvc.perform(post("/api/accounts").header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorCode").value("idem-ex-00"));
     }
@@ -203,7 +301,7 @@ class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
     void getWithoutIdempotencyKeyIsAllowed() throws Exception {
         long accountId = createAccount();
 
-        mockMvc.perform(get("/api/accounts/{id}", accountId).header(HEADER_CLIENT_ID, TEST_CLIENT_ID))
+        mockMvc.perform(get("/api/accounts/{id}", accountId).header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID))
                 .andExpect(status().isOk());
     }
 
@@ -214,25 +312,48 @@ class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
         return accountService.save(Account.of(null, ownerId, balance, Account.AccountStatus.ACTIVE, 0, now, now)).getId();
     }
 
+    private long acceptTransfer(long from, long to, String amount) throws Exception {
+        String body = mockMvc.perform(authorizedPost("/api/transfers")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(transferBody(from, to, amount)))
+                .andExpect(status().isAccepted())
+                .andReturn().getResponse().getContentAsString();
+        return objectMapper.readTree(body).get("transferId").asLong();
+    }
+
     private String transferBody(long from, long to, String amount) {
         return "{\"accountFrom\": \"" + from + "\", \"accountTo\": \"" + to + "\", \"amount\": \"" + amount
                 + "\", \"currency\": \"EUR\"}";
     }
 
     @Test
-    void transferMovesMoneyAndWritesTwoEntriesLinkedToTheTransfer() throws Exception {
+    void acceptedTransferIsPendingAndMovesNothingUntilItIsProcessed() throws Exception {
         long from = fundedAccount("100.00");
         long to = createAccount();
 
         String body = mockMvc.perform(authorizedPost("/api/transfers")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(transferBody(from, to, "25.50")))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("SUCCESSFUL"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.status").value("PENDING"))
                 .andExpect(jsonPath("$.errorCode").doesNotExist())
                 .andExpect(jsonPath("$.amount").value(25.50))
                 .andReturn().getResponse().getContentAsString();
         long transferId = objectMapper.readTree(body).get("transferId").asLong();
+
+        mockMvc.perform(authorizedGet("/api/accounts/{id}", from))
+                .andExpect(jsonPath("$.balance").value(100.00));
+        mockMvc.perform(authorizedGet("/api/transfers/{id}", transferId))
+                .andExpect(jsonPath("$.status").value("PENDING"));
+    }
+
+    @Test
+    void processedTransferMovesMoneyAndWritesTwoEntriesLinkedToTheTransfer() throws Exception {
+        long from = fundedAccount("100.00");
+        long to = createAccount();
+        long transferId = acceptTransfer(from, to, "25.50");
+
+        transferService.process(transferId);
 
         mockMvc.perform(authorizedGet("/api/accounts/{id}", from))
                 .andExpect(jsonPath("$.balance").value(74.50));
@@ -253,25 +374,103 @@ class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
+    void repeatedRequestWithTheSameKeyReturnsTheSameTransfer() throws Exception {
+        long from = fundedAccount("100.00");
+        long to = createAccount();
+        String key = UUID.randomUUID().toString();
+
+        String first = mockMvc.perform(post("/api/transfers")
+                        .header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID)
+                        .header(ApiHeaders.IDEMPOTENCY_KEY, key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(transferBody(from, to, "5.00")))
+                .andExpect(status().isAccepted())
+                .andReturn().getResponse().getContentAsString();
+        long transferId = objectMapper.readTree(first).get("transferId").asLong();
+        transferService.process(transferId);
+
+        mockMvc.perform(post("/api/transfers")
+                        .header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID)
+                        .header(ApiHeaders.IDEMPOTENCY_KEY, key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(transferBody(from, to, "5.00")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.transferId").value(transferId))
+                .andExpect(jsonPath("$.status").value("SUCCESSFUL"));
+        mockMvc.perform(authorizedGet("/api/accounts/{id}", from))
+                .andExpect(jsonPath("$.balance").value(95.00));
+    }
+
+    @Test
+    void sameKeyWithAnotherBodyReturns422() throws Exception {
+        long from = fundedAccount("100.00");
+        long to = createAccount();
+        String key = UUID.randomUUID().toString();
+        mockMvc.perform(post("/api/transfers")
+                        .header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID)
+                        .header(ApiHeaders.IDEMPOTENCY_KEY, key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(transferBody(from, to, "5.00")))
+                .andExpect(status().isAccepted());
+
+        mockMvc.perform(post("/api/transfers")
+                        .header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID)
+                        .header(ApiHeaders.IDEMPOTENCY_KEY, key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(transferBody(from, to, "6.00")))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.errorCode").value("idem-ex-02"));
+    }
+
+    @Test
+    void sameKeyFromAnotherClientIsAnotherRequest() throws Exception {
+        long from = fundedAccount("100.00");
+        long to = createAccount();
+        String key = UUID.randomUUID().toString();
+        mockMvc.perform(post("/api/transfers")
+                        .header(ApiHeaders.CLIENT_ID, "client-a")
+                        .header(ApiHeaders.IDEMPOTENCY_KEY, key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(transferBody(from, to, "5.00")))
+                .andExpect(status().isAccepted());
+
+        mockMvc.perform(post("/api/transfers")
+                        .header(ApiHeaders.CLIENT_ID, "client-b")
+                        .header(ApiHeaders.IDEMPOTENCY_KEY, key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(transferBody(from, to, "6.00")))
+                .andExpect(status().isAccepted());
+    }
+
+    @Test
+    void idempotencyKeyThatIsNotAUuidReturns400() throws Exception {
+        long from = fundedAccount("100.00");
+        long to = createAccount();
+
+        mockMvc.perform(post("/api/transfers")
+                        .header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID)
+                        .header(ApiHeaders.IDEMPOTENCY_KEY, "not-a-uuid")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(transferBody(from, to, "5.00")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("idem-ex-01"));
+    }
+
+    @Test
     void transferWithInsufficientFundsIsRecordedAsFailedAndMovesNothing() throws Exception {
         long from = fundedAccount("10.00");
         long to = createAccount();
+        long transferId = acceptTransfer(from, to, "10.01");
 
-        String body = mockMvc.perform(authorizedPost("/api/transfers")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(transferBody(from, to, "10.01")))
-                .andExpect(status().isOk())
+        transferService.process(transferId);
+
+        mockMvc.perform(authorizedGet("/api/transfers/{id}", transferId))
                 .andExpect(jsonPath("$.status").value("FAILED"))
-                .andExpect(jsonPath("$.errorCode").value("tx-ex-02"))
-                .andReturn().getResponse().getContentAsString();
-        long transferId = objectMapper.readTree(body).get("transferId").asLong();
-
+                .andExpect(jsonPath("$.errorCode").value("tx-ex-02"));
         mockMvc.perform(authorizedGet("/api/accounts/{id}", from))
                 .andExpect(jsonPath("$.balance").value(10.00));
         mockMvc.perform(authorizedGet("/api/accounts/{id}/transactions", to))
                 .andExpect(jsonPath("$", hasSize(0)));
-        mockMvc.perform(authorizedGet("/api/transfers/{id}", transferId))
-                .andExpect(jsonPath("$.status").value("FAILED"));
     }
 
     @Test
@@ -312,15 +511,21 @@ class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void transferInAnotherCurrencyIsRecordedAsFailed() throws Exception {
+    void transferInAnotherCurrencyIsRecordedAsFailedWhenProcessed() throws Exception {
         long from = fundedAccount("10.00");
         long to = createAccount();
 
-        mockMvc.perform(authorizedPost("/api/transfers")
+        String body = mockMvc.perform(authorizedPost("/api/transfers")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"accountFrom\": \"" + from + "\", \"accountTo\": \"" + to
                                 + "\", \"amount\": \"1.00\", \"currency\": \"USD\"}"))
-                .andExpect(status().isOk())
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andReturn().getResponse().getContentAsString();
+        long transferId = objectMapper.readTree(body).get("transferId").asLong();
+        transferService.process(transferId);
+
+        mockMvc.perform(authorizedGet("/api/transfers/{id}", transferId))
                 .andExpect(jsonPath("$.status").value("FAILED"))
                 .andExpect(jsonPath("$.errorCode").value("tx-ex-01"));
     }
@@ -334,8 +539,8 @@ class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"accountFrom\": \"" + from + "\", \"accountTo\": \"" + to
                                 + "\", \"amount\": \"1.00\"}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("SUCCESSFUL"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.status").value("PENDING"))
                 .andExpect(jsonPath("$.currency").value("EUR"));
     }
 
@@ -398,7 +603,7 @@ class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void transferWithoutIdempotencyKeyReturns400() throws Exception {
-        mockMvc.perform(post("/api/transfers").header(HEADER_CLIENT_ID, TEST_CLIENT_ID)
+        mockMvc.perform(post("/api/transfers").header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isBadRequest())

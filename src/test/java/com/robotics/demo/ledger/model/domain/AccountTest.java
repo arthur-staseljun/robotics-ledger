@@ -1,4 +1,4 @@
-package com.robotics.demo.ledger.model;
+package com.robotics.demo.ledger.model.domain;
 
 import com.robotics.demo.ledger.exception.classification.ErrorClassification;
 import com.robotics.demo.ledger.exception.classification.LedgerServiceException;

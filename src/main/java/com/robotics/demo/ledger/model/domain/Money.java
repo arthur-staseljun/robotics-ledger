@@ -1,11 +1,11 @@
-package com.robotics.demo.ledger.model;
-
-import com.fasterxml.jackson.annotation.JsonValue;
+package com.robotics.demo.ledger.model.domain;
 
 import java.math.BigDecimal;
 import java.util.Currency;
 
 public record Money(long amount, Currency currency) {
+
+    public static final Currency DEFAULT_CURRENCY = Currency.getInstance("EUR");
 
     public static Money of(BigDecimal amount, Currency currency) {
         BigDecimal plainAmount = amount.movePointRight(currency.getDefaultFractionDigits());
@@ -33,7 +33,6 @@ public record Money(long amount, Currency currency) {
         return amount < 0;
     }
 
-    @JsonValue
     public BigDecimal toDecimal() {
         return BigDecimal.valueOf(amount, currency.getDefaultFractionDigits());
     }
