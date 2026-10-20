@@ -1,15 +1,14 @@
 package com.robotics.demo.ledger.relay;
 
+import com.robotics.demo.ledger.relay.Lease.LeadershipLostException;
 import com.robotics.demo.ledger.relay.OutboxStore.Message;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
-import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -18,36 +17,43 @@ import java.util.concurrent.TimeoutException;
 @Component
 public class OutboxRelay {
 
-    private static final long LEADER_LOCK_KEY = 7_001L;
-
     private final OutboxStore outboxStore;
+    private final LeaderLockProvider leaderLockProvider;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final int batchSize;
     private final Duration sendTimeout;
 
-    public OutboxRelay(OutboxStore outboxStore, KafkaTemplate<String, String> kafkaTemplate,
+    public OutboxRelay(OutboxStore outboxStore, LeaderLockProvider leaderLockProvider,
+                       KafkaTemplate<String, String> kafkaTemplate,
                        @Value("${ledger.relay.batch-size}") int batchSize,
                        @Value("${ledger.relay.send-timeout}") Duration sendTimeout) {
         this.outboxStore = outboxStore;
+        this.leaderLockProvider = leaderLockProvider;
         this.kafkaTemplate = kafkaTemplate;
         this.batchSize = batchSize;
         this.sendTimeout = sendTimeout;
     }
 
     @Scheduled(initialDelayString = "${ledger.relay.initial-delay}", fixedDelayString = "${ledger.relay.delay}")
-    @Transactional
     public int relayOnce() {
-        if (!outboxStore.tryAcquireLeadership(LEADER_LOCK_KEY)) {
-            return 0;
+        try (Lease lease = leaderLockProvider.tryAcquire()) {
+            return lease.isLeader() ? relayBatch(lease) : 0;
         }
-        List<Message> batch = outboxStore.findUnsentForUpdate(batchSize);
+    }
+
+    private int relayBatch(Lease lease) {
         int sent = 0;
-        for (Message event : batch) {
-            if (!send(event)) {
-                break;
+        try {
+            for (Message event : outboxStore.findUnsent(batchSize)) {
+                lease.ensureHeld();
+                if (!send(event)) {
+                    break;
+                }
+                outboxStore.markSent(event.id());
+                sent++;
             }
-            outboxStore.markSent(event.id());
-            sent++;
+        } catch (LeadershipLostException ex) {
+            log.warn("The leadership is lost, {} events were sent before: {}", sent, ex.getMessage());
         }
         return sent;
     }
