@@ -37,7 +37,8 @@ public class TransferConsumerConfig {
                                                     @Value("${ledger.consumer.retry-interval-ms}") long retryIntervalMs) {
         DefaultErrorHandler errorHandler = new DefaultErrorHandler(recoverer,
                 new FixedBackOff(retryIntervalMs, FixedBackOff.UNLIMITED_ATTEMPTS));
-        errorHandler.addNotRetryableExceptions(JacksonException.class, LedgerServiceException.class);
+        errorHandler.addNotRetryableExceptions(JacksonException.class, LedgerServiceException.class,
+                ArithmeticException.class, IllegalArgumentException.class);
         return errorHandler;
     }
 }

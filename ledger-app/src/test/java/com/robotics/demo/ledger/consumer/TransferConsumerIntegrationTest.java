@@ -282,4 +282,17 @@ class TransferConsumerIntegrationTest extends AbstractPostgresIntegrationTest {
             secondInstance.stop();
         }
     }
+
+    @Test
+    void anUnexpectedFailureThatCanNeverSucceedGoesToTheDlqInsteadOfBlockingThePartition() throws Exception {
+        Long from = fundedAccount("100.00");
+        Long to = fundedAccount("0.00");
+        Long transferId = pendingTransfer(from, to, "10.00");
+        doThrow(new ArithmeticException("long overflow")).when(transferService).process(transferId);
+
+        publishCreatedEvent(transferId, from);
+
+        assertThat(awaitDeadLetters(from)).hasSize(1);
+        assertThat(accountService.getExistingAccount(from).getStatus()).isEqualTo(Account.AccountStatus.FROZEN);
+    }
 }
