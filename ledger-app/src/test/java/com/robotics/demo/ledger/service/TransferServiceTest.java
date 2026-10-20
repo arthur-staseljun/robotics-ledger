@@ -342,7 +342,7 @@ class TransferServiceTest {
         ArgumentCaptor<OutboxEntity> event = ArgumentCaptor.forClass(OutboxEntity.class);
         verify(outboxRepository).save(event.capture());
         assertThat(event.getValue().getEventType()).isEqualTo(OutboxEntity.EventType.processed);
-        assertThat(event.getValue().getTopic()).isEqualTo("transfer-complete");
+        assertThat(event.getValue().getTopic()).isEqualTo("transfer-results");
         assertThat(event.getValue().getAccountId()).isEqualTo(1L);
         assertThat(event.getValue().getTransferId()).isEqualTo(7L);
         assertThat(event.getValue().getPayload()).contains("\"status\":\"SUCCESSFUL\"");

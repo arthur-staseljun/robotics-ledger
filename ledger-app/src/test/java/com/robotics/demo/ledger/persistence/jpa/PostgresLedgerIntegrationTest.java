@@ -470,7 +470,7 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
         transferService.process(transferId);
 
         Integer processedEvents = jdbcTemplate.queryForObject(
-                "select count(*) from outbox where transfer_id = ? and event_type = 'processed' and topic = 'transfer-complete'",
+                "select count(*) from outbox where transfer_id = ? and event_type = 'processed' and topic = 'transfer-results'",
                 Integer.class, transferId);
         assertThat(processedEvents).isEqualTo(1);
     }
