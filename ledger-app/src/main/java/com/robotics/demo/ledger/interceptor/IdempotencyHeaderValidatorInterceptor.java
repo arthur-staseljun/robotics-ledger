@@ -28,13 +28,13 @@ public class IdempotencyHeaderValidatorInterceptor implements HandlerInterceptor
         if (!CLIENT_ID_FORMAT.matcher(clientId).matches()) {
             throw new LedgerServiceException(ErrorClassification.CLIENT_ID_INVALID);
         }
+        String idempotencyKey = request.getHeader(ApiHeaders.IDEMPOTENCY_KEY);
+        boolean post = HttpMethod.POST.matches(request.getMethod());
+        if (post && !StringUtils.hasText(idempotencyKey)) {
+            throw new LedgerServiceException(ErrorClassification.REQUIRED_IDEMPOTENCY_KEY);
+        }
         MDC.put(MDC_CLIENT_ID, clientId);
-
-        if (HttpMethod.POST.matches(request.getMethod())) {
-            String idempotencyKey = request.getHeader(ApiHeaders.IDEMPOTENCY_KEY);
-            if (!StringUtils.hasText(idempotencyKey)) {
-                throw new LedgerServiceException(ErrorClassification.REQUIRED_IDEMPOTENCY_KEY);
-            }
+        if (post) {
             MDC.put(MDC_IDEMPOTENCY_KEY, idempotencyKey);
         }
         return true;
