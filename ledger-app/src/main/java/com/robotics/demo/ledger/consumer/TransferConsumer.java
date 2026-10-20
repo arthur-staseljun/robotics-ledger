@@ -14,7 +14,7 @@ public class TransferConsumer {
     private final TransferService transferService;
     private final ObjectMapper objectMapper;
 
-    @KafkaListener(topics = TransferCreatedEvent.TOPIC)
+    @KafkaListener(topics = TransferCreatedEvent.TOPIC, groupId = "${ledger.kafka.consumer.transfers.group-id}")
     public void onTransferCreated(String payload) {
         TransferCreatedEvent event = objectMapper.readValue(payload, TransferCreatedEvent.class);
         transferService.process(event.transferId());

@@ -51,7 +51,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 
 @Tag("container")
-@SpringBootTest(properties = "ledger.consumer.retry-interval-ms=100")
+@SpringBootTest(properties = "ledger.kafka.consumer.retry-interval=100ms")
 class TransferConsumerIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final Currency EUR = Currency.getInstance("EUR");
@@ -91,10 +91,10 @@ class TransferConsumerIntegrationTest extends AbstractPostgresIntegrationTest {
     @Autowired
     private TransferConsumer transferConsumer;
 
-    @Value("${spring.kafka.consumer.group-id}")
+    @Value("${ledger.kafka.consumer.transfers.group-id}")
     private String groupId;
 
-    @Value("${ledger.consumer.partitions}")
+    @Value("${ledger.kafka.topics.transfers.partitions}")
     private int partitions;
 
     private static Money eur(String amount) {
@@ -103,7 +103,7 @@ class TransferConsumerIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private Long fundedAccount(String amount) {
         Instant now = Instant.now();
-        Long ownerId = customerService.createCustomer().getCustomerId();
+        Long ownerId = customerService.createCustomer("test-client", UUID.randomUUID()).customerId();
         return accountService.save(Account.of(null, ownerId, eur(amount), Account.AccountStatus.ACTIVE, 0, now, now))
                 .getId();
     }

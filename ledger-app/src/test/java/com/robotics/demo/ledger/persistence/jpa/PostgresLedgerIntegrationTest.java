@@ -69,8 +69,8 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     private Account newAccount() {
-        Long ownerId = customerService.createCustomer().getCustomerId();
-        return accountService.createAccount(ownerId);
+        Long ownerId = customerService.createCustomer("test-client", UUID.randomUUID()).customerId();
+        return accountService.save(Account.openFor(ownerId));
     }
 
     @Test
@@ -160,7 +160,7 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private Long fundedAccount(String amount) {
         Instant now = Instant.now();
-        Long ownerId = customerService.createCustomer().getCustomerId();
+        Long ownerId = customerService.createCustomer("test-client", UUID.randomUUID()).customerId();
         return accountService.save(Account.of(null, ownerId, eur(amount), Account.AccountStatus.ACTIVE, 0, now, now))
                 .getId();
     }
@@ -332,7 +332,7 @@ class PostgresLedgerIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void frozenAccountCannotSendMoney() {
         Instant now = Instant.now();
-        Long ownerId = customerService.createCustomer().getCustomerId();
+        Long ownerId = customerService.createCustomer("test-client", UUID.randomUUID()).customerId();
         Long frozen = accountService.save(Account.of(null, ownerId, eur("10.00"), Account.AccountStatus.FROZEN, 0,
                 now, now)).getId();
         Long to = newAccount().getId();

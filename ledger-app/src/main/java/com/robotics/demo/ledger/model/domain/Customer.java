@@ -7,7 +7,7 @@ import java.time.Instant;
 @Getter
 public class Customer {
 
-    private Long customerId;
+    private final Long customerId;
     private final Instant createdAt;
 
     private Customer(Long customerId, Instant createdAt) {

@@ -28,7 +28,7 @@ public enum ErrorClassification implements ErrorClassifier, Serializable {
     CURSOR_INVALID("hist-ex-00", "Cursor is invalid", HttpStatus.BAD_REQUEST),
     LIMIT_INVALID("hist-ex-01", "Limit is invalid", HttpStatus.BAD_REQUEST),
     IDEMPOTENCY_KEY_REUSED("idem-ex-02", "Idempotency key was already used with a different request",
-            HttpStatus.UNPROCESSABLE_ENTITY);
+            HttpStatus.UNPROCESSABLE_CONTENT);
 
     private static final long serialVersionUID = 1L;
 

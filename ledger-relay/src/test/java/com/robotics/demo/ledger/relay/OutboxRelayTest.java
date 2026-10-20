@@ -38,7 +38,7 @@ class OutboxRelayTest {
 
     @BeforeEach
     void setUp() {
-        outboxRelay = new OutboxRelay(outboxStore, kafkaTemplate, new RelayProperties(BATCH_SIZE, Duration.ofSeconds(10)));
+        outboxRelay = new OutboxRelay(outboxStore, kafkaTemplate, BATCH_SIZE, Duration.ofSeconds(10));
     }
 
     private static Message event(long id, long accountId) {

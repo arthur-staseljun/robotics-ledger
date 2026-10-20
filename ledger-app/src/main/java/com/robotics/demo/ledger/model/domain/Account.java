@@ -10,12 +10,12 @@ import java.util.Currency;
 @Getter
 public class Account {
 
-    private Long id;
-    private Long ownerId;
+    private final Long id;
+    private final Long ownerId;
     private Money balance;
     private AccountStatus status;
     private long lastSeq;
-    private Instant createdAt;
+    private final Instant createdAt;
     private Instant updatedAt;
 
     public enum AccountStatus {
@@ -24,30 +24,25 @@ public class Account {
         DISABLED
     }
 
-    public Account(Long id) {
+    private Account(Long id, Long ownerId, Money balance, AccountStatus status, long lastSeq, Instant createdAt,
+                    Instant updatedAt) {
         this.id = id;
-        this.balance = Money.zero(Money.DEFAULT_CURRENCY);
-        this.status = AccountStatus.ACTIVE;
-        this.createdAt = Instant.now();
-        this.updatedAt = Instant.now();
+        this.ownerId = ownerId;
+        this.balance = balance;
+        this.status = status;
+        this.lastSeq = lastSeq;
+        this.createdAt = createdAt;
+        this.updatedAt = updatedAt;
     }
 
     public static Account openFor(Long ownerId) {
-        Account account = new Account((Long) null);
-        account.ownerId = ownerId;
-        return account;
+        Instant now = Instant.now();
+        return new Account(null, ownerId, Money.zero(Money.DEFAULT_CURRENCY), AccountStatus.ACTIVE, 0, now, now);
     }
 
     public static Account of(Long id, Long ownerId, Money balance, AccountStatus status, long lastSeq,
                              Instant createdAt, Instant updatedAt) {
-        Account account = new Account(id);
-        account.ownerId = ownerId;
-        account.balance = balance;
-        account.status = status;
-        account.lastSeq = lastSeq;
-        account.createdAt = createdAt;
-        account.updatedAt = updatedAt;
-        return account;
+        return new Account(id, ownerId, balance, status, lastSeq, createdAt, updatedAt);
     }
 
     public void apply(Money change) {
@@ -70,9 +65,8 @@ public class Account {
         updatedAt = Instant.now();
     }
 
-    public long nextSeq() {
+    public void advanceSeq() {
         lastSeq++;
-        return lastSeq;
     }
 
     public Currency getCurrency() {

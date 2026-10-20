@@ -24,15 +24,13 @@ public class IdempotencyService {
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final ObjectMapper objectMapper;
 
-    public record KeyClaim(IdempotencyKeyEntity key, boolean isNew) {
-    }
-
     @Transactional(propagation = Propagation.MANDATORY)
-    public KeyClaim claim(String clientId, UUID idempotencyKey, byte[] requestHash) {
+    public KeyClaim claim(String clientId, UUID idempotencyKey, String... requestParts) {
+        byte[] requestHash = hash(requestParts);
         int inserted = idempotencyKeyRepository.insertIfAbsent(clientId, idempotencyKey, requestHash);
         IdempotencyKeyEntity key = idempotencyKeyRepository
                 .findById(new IdempotencyKeyEntity.Key(clientId, idempotencyKey))
-                .orElseThrow(() -> new LedgerServiceException(ErrorClassification.INTERNAL_SERVER_ERROR));
+                .orElseThrow(() -> new IllegalStateException("The idempotency key row is missing right after the insert"));
         if (inserted == 0 && !Arrays.equals(key.getRequestHash(), requestHash)) {
             throw new LedgerServiceException(ErrorClassification.IDEMPOTENCY_KEY_REUSED);
         }
@@ -43,12 +41,17 @@ public class IdempotencyService {
         return objectMapper.readValue(claim.key().getResponseJson(), responseType);
     }
 
+    public void linkTransfer(KeyClaim claim, Long transferId) {
+        claim.key().setTransferId(transferId);
+        claim.key().setUpdatedAt(Instant.now());
+    }
+
     public void storeResponse(KeyClaim claim, Object response) {
         claim.key().setResponseJson(objectMapper.writeValueAsString(response));
         claim.key().setUpdatedAt(Instant.now());
     }
 
-    public static byte[] hash(String... parts) {
+    private static byte[] hash(String... parts) {
         try {
             return MessageDigest.getInstance("SHA-256")
                     .digest(String.join("|", parts).getBytes(StandardCharsets.UTF_8));
@@ -56,4 +59,8 @@ public class IdempotencyService {
             throw new IllegalStateException(ex);
         }
     }
+
+    public record KeyClaim(IdempotencyKeyEntity key, boolean isNew) {
+    }
 }
+

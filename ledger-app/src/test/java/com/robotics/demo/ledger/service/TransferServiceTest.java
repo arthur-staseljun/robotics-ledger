@@ -4,13 +4,10 @@ import com.robotics.demo.ledger.exception.classification.ErrorClassification;
 import com.robotics.demo.ledger.exception.classification.LedgerServiceException;
 import com.robotics.demo.ledger.model.domain.Account;
 import com.robotics.demo.ledger.model.domain.Money;
-import com.robotics.demo.ledger.model.domain.Transaction;
 import com.robotics.demo.ledger.model.domain.Transfer;
 import com.robotics.demo.ledger.model.domain.Transfer.TransferStatus;
-import com.robotics.demo.ledger.persistence.jpa.OutboxRepository;
 import com.robotics.demo.ledger.persistence.jpa.TransferRepository;
 import com.robotics.demo.ledger.persistence.jpa.entity.IdempotencyKeyEntity;
-import com.robotics.demo.ledger.persistence.jpa.entity.OutboxEntity;
 import com.robotics.demo.ledger.persistence.jpa.entity.TransferEntity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -19,7 +16,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Instant;
 import java.util.Currency;
@@ -49,7 +45,7 @@ class TransferServiceTest {
     private IdempotencyService idempotencyService;
 
     @Mock
-    private OutboxRepository outboxRepository;
+    private OutboxService outboxService;
 
     @Mock
     private AccountService accountService;
@@ -61,8 +57,8 @@ class TransferServiceTest {
 
     @BeforeEach
     void setUp() {
-        transferService = new TransferService(transferRepository, idempotencyService, outboxRepository,
-                accountService, transactionService, JsonMapper.builder().build());
+        transferService = new TransferService(idempotencyService, outboxService, accountService,
+                transactionService, transferRepository);
     }
 
     private static Account account(long id, long cents) {
@@ -109,8 +105,8 @@ class TransferServiceTest {
 
     @Test
     void newKeyCreatesPendingTransferOutboxEventAndKeyRecord() {
-        IdempotencyKeyEntity key = keyEntity(new byte[0], null);
-        when(idempotencyService.claim(any(), any(), any())).thenReturn(new IdempotencyService.KeyClaim(key, true));
+        IdempotencyService.KeyClaim claim = new IdempotencyService.KeyClaim(keyEntity(new byte[0], null), true);
+        when(idempotencyService.claim(any(), any(), any(String[].class))).thenReturn(claim);
         when(accountService.getExistingAccount(1L)).thenReturn(account(1L, 10000));
         when(accountService.getExistingAccount(2L)).thenReturn(account(2L, 0));
         givenTransfersAreStored();
@@ -122,22 +118,18 @@ class TransferServiceTest {
         assertThat(transfer.getStatus()).isEqualTo(TransferStatus.PENDING);
         assertThat(transfer.getTransferId()).isEqualTo(7L);
         assertThat(transfer.getOwnerId()).isEqualTo(101L);
-        ArgumentCaptor<OutboxEntity> event = ArgumentCaptor.forClass(OutboxEntity.class);
-        verify(outboxRepository).save(event.capture());
-        assertThat(event.getValue().getEventType()).isEqualTo(OutboxEntity.EventType.created);
-        assertThat(event.getValue().getTopic()).isEqualTo("transfers");
-        assertThat(event.getValue().getTransferId()).isEqualTo(7L);
-        assertThat(event.getValue().getAccountId()).isEqualTo(1L);
-        assertThat(event.getValue().getPayload()).contains("\"transferId\":7").contains("\"amount\":2500");
-        assertThat(key.getTransferId()).isEqualTo(7L);
-        assertThat(key.getResponseJson()).contains("PENDING");
+        ArgumentCaptor<Transfer> created = ArgumentCaptor.forClass(Transfer.class);
+        verify(outboxService).saveCreated(created.capture());
+        assertThat(created.getValue().getTransferId()).isEqualTo(7L);
+        assertThat(created.getValue().getStatus()).isEqualTo(TransferStatus.PENDING);
+        verify(idempotencyService).linkTransfer(claim, 7L);
         verify(accountService, never()).getExistingAccountLocking(any());
-        verify(transactionService, never()).save(any());
+        verify(transactionService, never()).recordTransfer(any(), any(), any(), any());
     }
 
     @Test
     void sameKeyAndSameRequestReturnsTheExistingTransferAndStoresNothing() {
-        when(idempotencyService.claim(any(), any(), any())).thenReturn(new IdempotencyService.KeyClaim(keyEntity(new byte[0], 7L), false));
+        when(idempotencyService.claim(any(), any(), any(String[].class))).thenReturn(new IdempotencyService.KeyClaim(keyEntity(new byte[0], 7L), false));
         when(transferRepository.findById(7L)).thenReturn(Optional.of(pendingEntity(1L, 2L, 2500, "EUR")));
 
         TransferService.AcceptedTransfer accepted = transferService.accept(CLIENT_ID, KEY, 1L, 2L, eur(2500));
@@ -145,19 +137,18 @@ class TransferServiceTest {
         assertThat(accepted.replayed()).isTrue();
         assertThat(accepted.transfer().getTransferId()).isEqualTo(7L);
         verify(transferRepository, never()).saveAndFlush(any());
-        verify(outboxRepository, never()).save(any());
+        verify(outboxService, never()).saveCreated(any());
     }
 
     @Test
-    void theRequestHashCoversEveryFieldOfTheTransfer() {
-        ArgumentCaptor<byte[]> hash = ArgumentCaptor.forClass(byte[].class);
-        when(idempotencyService.claim(any(), any(), hash.capture()))
+    void theIdempotencyClaimCoversEveryFieldOfTheTransfer() {
+        when(idempotencyService.claim(any(), any(), any(String[].class)))
                 .thenReturn(new IdempotencyService.KeyClaim(keyEntity(new byte[0], 7L), false));
         when(transferRepository.findById(7L)).thenReturn(Optional.of(pendingEntity(1L, 2L, 2500, "EUR")));
 
         transferService.accept(CLIENT_ID, KEY, 1L, 2L, eur(2500));
 
-        assertThat(hash.getValue()).isEqualTo(IdempotencyService.hash(TransferService.TRANSFERS_REQUEST, "1", "2", "2500", "EUR"));
+        verify(idempotencyService).claim(CLIENT_ID, KEY, TransferService.TRANSFERS_REQUEST, "1", "2", "2500", "EUR");
     }
 
     @Test
@@ -186,7 +177,7 @@ class TransferServiceTest {
 
     @Test
     void unknownAccountIsRejectedAndNoTransferIsStored() {
-        when(idempotencyService.claim(any(), any(), any()))
+        when(idempotencyService.claim(any(), any(), any(String[].class)))
                 .thenReturn(new IdempotencyService.KeyClaim(keyEntity(new byte[0], null), true));
         when(accountService.getExistingAccount(1L))
                 .thenThrow(new LedgerServiceException(ErrorClassification.ACCOUNT_DOES_NOT_EXIST));
@@ -197,14 +188,16 @@ class TransferServiceTest {
                 .isEqualTo(ErrorClassification.ACCOUNT_DOES_NOT_EXIST);
 
         verify(transferRepository, never()).saveAndFlush(any());
-        verify(outboxRepository, never()).save(any());
+        verify(outboxService, never()).saveCreated(any());
     }
 
     @Test
     void processingChangesBothBalancesAndWritesTwoLinkedEntries() {
         when(transferRepository.findByIdLocking(7L)).thenReturn(Optional.of(pendingEntity(1L, 2L, 2500, "EUR")));
-        when(accountService.getExistingAccountLocking(1L)).thenReturn(account(1L, 10000));
-        when(accountService.getExistingAccountLocking(2L)).thenReturn(account(2L, 0));
+        Account from = account(1L, 10000);
+        Account to = account(2L, 0);
+        when(accountService.getExistingAccountLocking(1L)).thenReturn(from);
+        when(accountService.getExistingAccountLocking(2L)).thenReturn(to);
         givenTransfersAreStored();
 
         Transfer result = transferService.process(7L);
@@ -216,21 +209,7 @@ class TransferServiceTest {
         assertThat(accounts.getAllValues()).extracting(Account::getBalance)
                 .containsExactlyInAnyOrder(eur(7500), eur(2500));
         assertThat(accounts.getAllValues()).extracting(Account::getLastSeq).containsOnly(5L);
-        ArgumentCaptor<Transaction> entries = ArgumentCaptor.forClass(Transaction.class);
-        verify(transactionService, times(2)).save(entries.capture());
-        Transaction withdrawal = entries.getAllValues().get(0);
-        Transaction deposit = entries.getAllValues().get(1);
-        assertThat(withdrawal.getAccountId()).isEqualTo(1L);
-        assertThat(withdrawal.getTransactionType()).isEqualTo(Transaction.TransactionType.WITHDRAWAL);
-        assertThat(withdrawal.getAmount()).isEqualTo(eur(-2500));
-        assertThat(withdrawal.getBalanceAfter()).isEqualTo(eur(7500));
-        assertThat(withdrawal.getTransferId()).isEqualTo(7L);
-        assertThat(withdrawal.getSeqId()).isEqualTo(5);
-        assertThat(deposit.getAccountId()).isEqualTo(2L);
-        assertThat(deposit.getTransactionType()).isEqualTo(Transaction.TransactionType.DEPOSIT);
-        assertThat(deposit.getAmount()).isEqualTo(eur(2500));
-        assertThat(deposit.getBalanceAfter()).isEqualTo(eur(2500));
-        assertThat(deposit.getSeqId()).isEqualTo(5);
+        verify(transactionService).recordTransfer(7L, from, to, eur(2500));
     }
 
     @Test
@@ -245,7 +224,7 @@ class TransferServiceTest {
         assertThat(result.getStatus()).isEqualTo(TransferStatus.FAILED);
         assertThat(result.getErrorCode()).isEqualTo(ErrorClassification.INSUFFICIENT_FUNDS.getErrorCode());
         verify(accountService, never()).save(any());
-        verify(transactionService, never()).save(any());
+        verify(transactionService, never()).recordTransfer(any(), any(), any(), any());
     }
 
     @Test
@@ -289,7 +268,8 @@ class TransferServiceTest {
         assertThat(result.getStatus()).isEqualTo(TransferStatus.SUCCESSFUL);
         verify(accountService, never()).getExistingAccountLocking(any());
         verify(transferRepository, never()).saveAndFlush(any());
-        verify(transactionService, never()).save(any());
+        verify(transactionService, never()).recordTransfer(any(), any(), any(), any());
+        verify(outboxService, never()).saveProcessed(any());
     }
 
     @Test
@@ -339,13 +319,9 @@ class TransferServiceTest {
 
         transferService.process(7L);
 
-        ArgumentCaptor<OutboxEntity> event = ArgumentCaptor.forClass(OutboxEntity.class);
-        verify(outboxRepository).save(event.capture());
-        assertThat(event.getValue().getEventType()).isEqualTo(OutboxEntity.EventType.processed);
-        assertThat(event.getValue().getTopic()).isEqualTo("transfer-results");
-        assertThat(event.getValue().getAccountId()).isEqualTo(1L);
-        assertThat(event.getValue().getTransferId()).isEqualTo(7L);
-        assertThat(event.getValue().getPayload()).contains("\"status\":\"SUCCESSFUL\"");
+        ArgumentCaptor<Transfer> processed = ArgumentCaptor.forClass(Transfer.class);
+        verify(outboxService).saveProcessed(processed.capture());
+        assertThat(processed.getValue().getStatus()).isEqualTo(TransferStatus.SUCCESSFUL);
     }
 
     @Test
@@ -357,9 +333,9 @@ class TransferServiceTest {
 
         transferService.process(7L);
 
-        ArgumentCaptor<OutboxEntity> event = ArgumentCaptor.forClass(OutboxEntity.class);
-        verify(outboxRepository).save(event.capture());
-        assertThat(event.getValue().getPayload()).contains("\"status\":\"FAILED\"")
-                .contains(ErrorClassification.INSUFFICIENT_FUNDS.getErrorCode());
+        ArgumentCaptor<Transfer> processed = ArgumentCaptor.forClass(Transfer.class);
+        verify(outboxService).saveProcessed(processed.capture());
+        assertThat(processed.getValue().getStatus()).isEqualTo(TransferStatus.FAILED);
+        assertThat(processed.getValue().getErrorCode()).isEqualTo(ErrorClassification.INSUFFICIENT_FUNDS.getErrorCode());
     }
 }

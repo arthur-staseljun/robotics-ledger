@@ -1,6 +1,7 @@
 package com.robotics.demo.ledger.model.domain;
 
 import com.robotics.demo.ledger.exception.classification.ErrorClassification;
+import com.robotics.demo.ledger.exception.classification.LedgerServiceException;
 import lombok.Getter;
 
 import java.time.Instant;
@@ -38,9 +39,10 @@ public class Transfer {
         this.updatedAt = updatedAt;
     }
 
-    public static Transfer pending(Long ownerId, Long accountFrom, Long accountTo, Money amount) {
+    public static Transfer pending(Account accountFrom, Account accountTo, Money amount) {
         Instant now = Instant.now();
-        return new Transfer(null, ownerId, accountFrom, accountTo, amount, TransferStatus.PENDING, null, now, now);
+        return new Transfer(null, accountFrom.getOwnerId(), accountFrom.getId(), accountTo.getId(), amount,
+                TransferStatus.PENDING, null, now, now);
     }
 
     public static Transfer of(Long transferId, Long ownerId, Long accountFrom, Long accountTo, Money amount,
@@ -52,12 +54,22 @@ public class Transfer {
         return amount.currency();
     }
 
-    public void succeed() {
+    public void settle(Account accountFrom, Account accountTo) {
+        try {
+            accountFrom.apply(amount.negate());
+            accountTo.apply(amount);
+            succeed();
+        } catch (LedgerServiceException ex) {
+            fail(ex.getErrorClassification());
+        }
+    }
+
+    private void succeed() {
         status = TransferStatus.SUCCESSFUL;
         updatedAt = Instant.now();
     }
 
-    public void fail(ErrorClassification classification) {
+    private void fail(ErrorClassification classification) {
         status = TransferStatus.FAILED;
         errorCode = classification.getErrorCode();
         updatedAt = Instant.now();

@@ -16,6 +16,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.sql.Connection;
+import java.util.List;
+import java.util.Map;
+import javax.sql.DataSource;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Currency;
@@ -44,9 +48,12 @@ class ReconciliationIntegrationTest extends AbstractPostgresIntegrationTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private DataSource dataSource;
+
     private Long accountWithBalance(String amount) {
         Instant now = Instant.now();
-        Long ownerId = customerService.createCustomer().getCustomerId();
+        Long ownerId = customerService.createCustomer("test-client", UUID.randomUUID()).customerId();
         Money balance = Money.of(new BigDecimal(amount), EUR);
         return accountService.save(Account.of(null, ownerId, balance, Account.AccountStatus.ACTIVE, 0, now, now))
                 .getId();
@@ -101,7 +108,7 @@ class ReconciliationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         ReconciliationReport report = reconciliationJob.reconcile();
 
-        assertThat(report.balanceMismatches()).contains(new BalanceMismatch(account, 500, 0));
+        assertThat(report.balanceMismatches()).contains(new BalanceMismatch(account, ownerOf(account), "EUR", 500, 0));
     }
 
     @Test
@@ -115,8 +122,8 @@ class ReconciliationIntegrationTest extends AbstractPostgresIntegrationTest {
         ReconciliationReport report = reconciliationJob.reconcile();
 
         assertThat(report.entryCountMismatches()).contains(
-                new EntryCountMismatch(noEntries, "SUCCESSFUL", 0),
-                new EntryCountMismatch(oneEntry, "SUCCESSFUL", 1));
+                new EntryCountMismatch(noEntries, "SUCCESSFUL", from, to, 2, 0),
+                new EntryCountMismatch(oneEntry, "SUCCESSFUL", from, to, 2, 1));
     }
 
     @Test
@@ -158,5 +165,76 @@ class ReconciliationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThat(report.unsentOutboxRows()).extracting(UnsentOutboxRow::id)
                 .contains(stuckRow).doesNotContain(freshRow, sentRow);
+    }
+
+    private List<Map<String, Object>> findingsOf(String kind, Long subjectId) {
+        return jdbcTemplate.queryForList(
+                "select status::text as status, first_run_id, last_run_id, resolved_at from reconciliation_finding where kind = cast(? as finding_kind) and subject_id = ?",
+                kind, subjectId);
+    }
+
+    @Test
+    void aMismatchIsStoredOnceAndLaterRunsOnlyRefreshIt() {
+        Long from = accountWithBalance("0.00");
+        Long to = accountWithBalance("0.00");
+        Long stuck = transfer(from, to, "PENDING", null, "10 minutes");
+
+        reconciliationJob.reconcile();
+        reconciliationJob.reconcile();
+
+        List<Map<String, Object>> findings = findingsOf("STUCK_TRANSFER", stuck);
+        assertThat(findings).hasSize(1);
+        assertThat(findings.getFirst()).containsEntry("status", "OPEN");
+        assertThat((Long) findings.getFirst().get("last_run_id")).isGreaterThan((Long) findings.getFirst().get("first_run_id"));
+    }
+
+    @Test
+    void aMismatchIsResolvedWhenItGoesAway() {
+        Long from = accountWithBalance("0.00");
+        Long to = accountWithBalance("0.00");
+        Long stuck = transfer(from, to, "PENDING", null, "10 minutes");
+        reconciliationJob.reconcile();
+
+        jdbcTemplate.update("update transfers set status = 'FAILED', error_code = 'tx-ex-02' where transfer_id = ?", stuck);
+        reconciliationJob.reconcile();
+
+        List<Map<String, Object>> findings = findingsOf("STUCK_TRANSFER", stuck);
+        assertThat(findings).hasSize(1);
+        assertThat(findings.getFirst()).containsEntry("status", "RESOLVED");
+        assertThat(findings.getFirst().get("resolved_at")).isNotNull();
+    }
+
+    @Test
+    void everyRunIsRecordedWithItsCounts() {
+        Integer before = jdbcTemplate.queryForObject("select count(*) from reconciliation_run", Integer.class);
+
+        reconciliationJob.reconcile();
+
+        assertThat(jdbcTemplate.queryForObject("select count(*) from reconciliation_run", Integer.class))
+                .isEqualTo(before + 1);
+        Map<String, Object> run = jdbcTemplate.queryForMap(
+                "select finished_at, new_findings, open_findings, resolved_findings from reconciliation_run order by id desc limit 1");
+        assertThat(run.get("finished_at")).isNotNull();
+        assertThat(run.get("open_findings")).isNotNull();
+    }
+
+    @Test
+    void anotherInstanceHoldingTheLeaderLockBlocksTheRun() throws Exception {
+        Integer before = jdbcTemplate.queryForObject("select count(*) from reconciliation_run", Integer.class);
+
+        try (Connection otherInstance = dataSource.getConnection()) {
+            otherInstance.createStatement().execute("select pg_advisory_lock(7002)");
+
+            ReconciliationReport report = reconciliationJob.reconcile();
+
+            assertThat(report.isClean()).isTrue();
+            assertThat(jdbcTemplate.queryForObject("select count(*) from reconciliation_run", Integer.class))
+                    .isEqualTo(before);
+            otherInstance.createStatement().execute("select pg_advisory_unlock(7002)");
+        }
+
+        reconciliationJob.reconcile();
+        assertThat(jdbcTemplate.queryForObject("select count(*) from reconciliation_run", Integer.class))
+                .isEqualTo(before + 1);
     }
 }

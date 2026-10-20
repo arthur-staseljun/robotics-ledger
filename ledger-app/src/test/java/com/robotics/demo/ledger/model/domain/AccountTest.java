@@ -73,12 +73,13 @@ class AccountTest {
     }
 
     @Test
-    void nextSeqContinuesFromTheLastSequenceNumber() {
+    void advancingTheSequenceContinuesFromTheLastSequenceNumber() {
         Instant now = Instant.now();
         Account account = Account.of(1L, 7L, new Money(0, EUR), Account.AccountStatus.ACTIVE, 41, now, now);
 
-        assertThat(account.nextSeq()).isEqualTo(42);
-        assertThat(account.nextSeq()).isEqualTo(43);
+        account.advanceSeq();
+        assertThat(account.getLastSeq()).isEqualTo(42);
+        account.advanceSeq();
         assertThat(account.getLastSeq()).isEqualTo(43);
     }
 

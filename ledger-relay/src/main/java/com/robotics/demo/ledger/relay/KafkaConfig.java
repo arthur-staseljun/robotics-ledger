@@ -13,8 +13,8 @@ public class KafkaConfig {
     public static final String TRANSFER_RESULTS_TOPIC = "transfer-results";
 
     @Bean
-    public NewTopic transfersTopic(@Value("${ledger.relay.partitions}") int partitions,
-                                   @Value("${ledger.relay.replicas}") int replicas) {
+    public NewTopic transfersTopic(@Value("${ledger.kafka.topics.transfers.partitions}") int partitions,
+                                   @Value("${ledger.kafka.replication-factor}") int replicas) {
         return TopicBuilder.name(TRANSFERS_TOPIC)
                 .partitions(partitions)
                 .replicas(replicas)
@@ -22,8 +22,8 @@ public class KafkaConfig {
     }
 
     @Bean
-    public NewTopic transferResultsTopic(@Value("${ledger.relay.partitions}") int partitions,
-                                          @Value("${ledger.relay.replicas}") int replicas) {
+    public NewTopic transferResultsTopic(@Value("${ledger.kafka.topics.transfer-results.partitions}") int partitions,
+                                          @Value("${ledger.kafka.replication-factor}") int replicas) {
         return TopicBuilder.name(TRANSFER_RESULTS_TOPIC)
                 .partitions(partitions)
                 .replicas(replicas)

@@ -60,8 +60,8 @@ class OutboxRelayIntegrationTest {
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
         registry.add("spring.kafka.bootstrap-servers", KAFKA::getBootstrapServers);
-        registry.add("ledger.relay.initial-delay-ms", () -> "3600000");
-        registry.add("ledger.relay.delay-ms", () -> "3600000");
+        registry.add("ledger.relay.initial-delay", () -> "1h");
+        registry.add("ledger.relay.delay", () -> "1h");
     }
 
     @Autowired

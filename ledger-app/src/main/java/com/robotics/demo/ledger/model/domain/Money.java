@@ -18,6 +18,7 @@ public record Money(long amount, Currency currency) {
 
     public Money plus(Money other) {
         requireSameCurrency(other);
+        // an overflow (ArithmeticException) is not handled as a business error
         return new Money(Math.addExact(amount, other.amount), currency);
     }
 

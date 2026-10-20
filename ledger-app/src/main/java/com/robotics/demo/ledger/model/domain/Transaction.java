@@ -13,7 +13,7 @@ public class Transaction {
     private final TransactionType transactionType;
     private final Money amount;
     private final Money balanceAfter;
-    private Instant createdAt;
+    private final Instant createdAt;
 
     public Transaction(Long accountId, Long transferId, long seqId, Money amount, Money balanceAfter) {
         this(accountId, transferId, seqId, amount.isPositive() ? TransactionType.DEPOSIT : TransactionType.WITHDRAWAL,

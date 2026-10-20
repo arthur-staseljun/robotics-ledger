@@ -5,22 +5,14 @@ import com.robotics.demo.ledger.exception.classification.ErrorClassification;
 import com.robotics.demo.ledger.exception.classification.LedgerServiceException;
 import com.robotics.demo.ledger.model.domain.Account;
 import com.robotics.demo.ledger.model.domain.Money;
-import com.robotics.demo.ledger.model.domain.Transaction;
 import com.robotics.demo.ledger.model.domain.Transfer;
-import com.robotics.demo.ledger.model.event.TransferCreatedEvent;
-import com.robotics.demo.ledger.model.event.TransferProcessedEvent;
-import com.robotics.demo.ledger.model.response.TransferResponse;
-import com.robotics.demo.ledger.persistence.jpa.OutboxRepository;
 import com.robotics.demo.ledger.persistence.jpa.TransferRepository;
-import com.robotics.demo.ledger.persistence.jpa.entity.OutboxEntity;
 import com.robotics.demo.ledger.persistence.jpa.entity.TransferEntity;
+import com.robotics.demo.ledger.persistence.jpa.mapper.TransferMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import tools.jackson.databind.ObjectMapper;
 
-import java.time.Instant;
-import java.util.Currency;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -34,41 +26,36 @@ public class TransferService {
 
     public static final String TRANSFERS_REQUEST = "transfers";
 
-    private final TransferRepository transferRepository;
     private final IdempotencyService idempotencyService;
-    private final OutboxRepository outboxRepository;
+    private final OutboxService outboxService;
     private final AccountService accountService;
     private final TransactionService transactionService;
-    private final ObjectMapper objectMapper;
 
-    public record AcceptedTransfer(Transfer transfer, boolean replayed) {
-    }
+    private final TransferRepository transferRepository;
 
     @Transactional
-    public AcceptedTransfer accept(String clientId, UUID idempotencyKey, Long accountFrom, Long accountTo,
-                                   Money amount) {
+    public AcceptedTransfer accept(String clientId, UUID idempotencyKey,
+                                   Long accountFromId, Long accountToId, Money amount) {
         if (!amount.isPositive()) {
             throw new LedgerServiceException(ErrorClassification.AMOUNT_PARSE_ERROR);
         }
-        if (accountFrom.equals(accountTo)) {
+        if (accountFromId.equals(accountToId)) {
             throw new LedgerServiceException(ErrorClassification.SAME_ACCOUNT_TRANSFER);
         }
 
-        IdempotencyService.KeyClaim claim = idempotencyService.claim(clientId, idempotencyKey, IdempotencyService.hash(TRANSFERS_REQUEST,
-                valueOf(accountFrom), valueOf(accountTo), valueOf(amount.amount()),
-                amount.currency().getCurrencyCode()));
+        IdempotencyService.KeyClaim claim = idempotencyService.claim(clientId, idempotencyKey, TRANSFERS_REQUEST,
+                valueOf(accountFromId), valueOf(accountToId), valueOf(amount.amount()),
+                amount.currency().getCurrencyCode());
         if (!claim.isNew()) {
             return new AcceptedTransfer(getTransfer(claim.key().getTransferId()), true);
         }
 
-        Account from = accountService.getExistingAccount(accountFrom);
-        accountService.getExistingAccount(accountTo);
-        Transfer transfer = save(Transfer.pending(from.getOwnerId(), accountFrom, accountTo, amount));
-        saveCreatedEvent(transfer);
+        Account accountFrom = accountService.getExistingAccount(accountFromId);
+        Account accountTo = accountService.getExistingAccount(accountToId);
+        Transfer transfer = save(Transfer.pending(accountFrom, accountTo, amount));
+        outboxService.saveCreated(transfer);
 
-        claim.key().setTransferId(transfer.getTransferId());
-        claim.key().setResponseJson(objectMapper.writeValueAsString(TransferResponse.from(transfer)));
-        claim.key().setUpdatedAt(Instant.now());
+        idempotencyService.linkTransfer(claim, transfer.getTransferId());
         return new AcceptedTransfer(transfer, false);
     }
 
@@ -76,44 +63,32 @@ public class TransferService {
     public Transfer process(Long transferId) {
         TransferEntity entity = transferRepository.findByIdLocking(transferId)
                 .orElseThrow(() -> new LedgerServiceException(ErrorClassification.TRANSFER_DOES_NOT_EXIST));
-        if (entity.getStatus() != Transfer.TransferStatus.PENDING) {
-            return toDomain(entity);
+        Transfer transfer = TransferMapper.toDomain(entity);
+        if (transfer.getStatus() != Transfer.TransferStatus.PENDING) {
+            return transfer;
         }
 
-        Transfer transfer = toDomain(entity);
-        Long accountFrom = transfer.getAccountFrom();
-        Long accountTo = transfer.getAccountTo();
-        Map<Long, Account> locked = lockInIdOrder(accountFrom, accountTo);
-        Account from = locked.get(accountFrom);
-        Account to = locked.get(accountTo);
+        Map<Long, Account> locked = lockInIdOrder(transfer.getAccountFrom(), transfer.getAccountTo());
+        Account accountFrom = locked.get(transfer.getAccountFrom());
+        Account accountTo = locked.get(transfer.getAccountTo());
 
-        Money amount = transfer.getAmount();
-        try {
-            from.apply(amount.negate());
-            to.apply(amount);
-            transfer.succeed();
-        } catch (LedgerServiceException ex) {
-            transfer.fail(ex.getErrorClassification());
-        }
+        transfer.settle(accountFrom, accountTo);
         transfer = save(transfer);
 
         if (transfer.getStatus() == Transfer.TransferStatus.SUCCESSFUL) {
-            long fromSeq = from.nextSeq();
-            long toSeq = to.nextSeq();
-            accountService.save(from);
-            accountService.save(to);
-            transactionService.save(new Transaction(accountFrom, transfer.getTransferId(), fromSeq,
-                    amount.negate(), from.getBalance()));
-            transactionService.save(new Transaction(accountTo, transfer.getTransferId(), toSeq,
-                    amount, to.getBalance()));
+            accountFrom.advanceSeq();
+            accountTo.advanceSeq();
+            accountService.save(accountFrom);
+            accountService.save(accountTo);
+            transactionService.recordTransfer(transfer.getTransferId(), accountFrom, accountTo, transfer.getAmount());
         }
-        saveProcessedEvent(transfer);
+        outboxService.saveProcessed(transfer);
         return transfer;
     }
 
     public Transfer getTransfer(Long transferId) {
         return transferRepository.findById(transferId)
-                .map(TransferService::toDomain)
+                .map(TransferMapper::toDomain)
                 .orElseThrow(() -> new LedgerServiceException(ErrorClassification.TRANSFER_DOES_NOT_EXIST));
     }
 
@@ -124,51 +99,12 @@ public class TransferService {
         return locked;
     }
 
-    private void saveCreatedEvent(Transfer transfer) {
-        saveOutboxEvent(transfer, OutboxEntity.EventType.created, TransferCreatedEvent.TOPIC,
-                new TransferCreatedEvent(transfer.getTransferId(), transfer.getAccountFrom(),
-                        transfer.getAccountTo(), transfer.getAmount().amount(),
-                        transfer.getCurrency().getCurrencyCode()));
-    }
-
-    private void saveProcessedEvent(Transfer transfer) {
-        saveOutboxEvent(transfer, OutboxEntity.EventType.processed, TransferProcessedEvent.TOPIC,
-                new TransferProcessedEvent(transfer.getTransferId(), transfer.getStatus().name(),
-                        transfer.getErrorCode()));
-    }
-
-    private void saveOutboxEvent(Transfer transfer, OutboxEntity.EventType eventType, String topic, Object event) {
-        Instant now = Instant.now();
-        outboxRepository.save(OutboxEntity.builder()
-                .accountId(transfer.getAccountFrom())
-                .transferId(transfer.getTransferId())
-                .eventType(eventType)
-                .topic(topic)
-                .payload(objectMapper.writeValueAsString(event))
-                .createdAt(now)
-                .updatedAt(now)
-                .build());
-    }
-
     private Transfer save(Transfer transfer) {
-        TransferEntity entity = TransferEntity.builder()
-                .id(transfer.getTransferId())
-                .ownerId(transfer.getOwnerId())
-                .accountFrom(transfer.getAccountFrom())
-                .accountTo(transfer.getAccountTo())
-                .amount(transfer.getAmount().amount())
-                .currency(transfer.getCurrency().getCurrencyCode())
-                .status(transfer.getStatus())
-                .errorCode(transfer.getErrorCode())
-                .createdAt(transfer.getCreatedAt())
-                .updatedAt(transfer.getUpdatedAt())
-                .build();
-        return toDomain(transferRepository.saveAndFlush(entity));
+        return TransferMapper.toDomain(
+                transferRepository.saveAndFlush(TransferMapper.toEntity(transfer))
+        );
     }
 
-    private static Transfer toDomain(TransferEntity entity) {
-        Money amount = new Money(entity.getAmount(), Currency.getInstance(entity.getCurrency()));
-        return Transfer.of(entity.getId(), entity.getOwnerId(), entity.getAccountFrom(), entity.getAccountTo(), amount,
-                entity.getStatus(), entity.getErrorCode(), entity.getCreatedAt(), entity.getUpdatedAt());
+    public record AcceptedTransfer(Transfer transfer, boolean replayed) {
     }
 }

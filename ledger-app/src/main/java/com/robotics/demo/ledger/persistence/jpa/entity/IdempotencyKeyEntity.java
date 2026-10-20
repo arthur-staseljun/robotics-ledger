@@ -1,6 +1,5 @@
 package com.robotics.demo.ledger.persistence.jpa.entity;
 
-import com.robotics.demo.ledger.interceptor.ApiHeaders;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
@@ -28,8 +27,10 @@ import java.util.UUID;
 @Builder
 public class IdempotencyKeyEntity {
 
+    public static final int CLIENT_ID_MAX_LENGTH = 64;
+
     @Id
-    @Column(name = "client_id", length = ApiHeaders.CLIENT_ID_MAX_LENGTH)
+    @Column(name = "client_id", length = CLIENT_ID_MAX_LENGTH)
     private String clientId;
 
     @Id

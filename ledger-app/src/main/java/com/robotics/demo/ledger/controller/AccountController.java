@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
 import static com.robotics.demo.ledger.controller.ControllerHelper.parseAccountId;
+import static com.robotics.demo.ledger.controller.ControllerHelper.parseCustomerId;
 import static com.robotics.demo.ledger.controller.ControllerHelper.parseIdempotencyKey;
 
 @RestController
@@ -21,7 +22,8 @@ public class AccountController {
     public AccountResponse createAccount(@RequestHeader(ApiHeaders.CLIENT_ID) String clientId,
                                          @RequestHeader(ApiHeaders.IDEMPOTENCY_KEY) String idempotencyKey,
                                          @RequestBody CreateAccountRequest request) {
-        return accountService.createAccount(clientId, parseIdempotencyKey(idempotencyKey), request.getOwnerId());
+        return accountService.createAccount(clientId, parseIdempotencyKey(idempotencyKey),
+                parseCustomerId(request.ownerId()));
     }
 
     @GetMapping("/{accountId}")
