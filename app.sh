@@ -6,5 +6,10 @@ trap 'kill 0' EXIT
 docker compose up -d --wait
 ./mvnw -q -DskipTests package
 
-java -jar ledger-relay/target/ledger-relay-*-SNAPSHOT.jar &
-java -jar ledger-app/target/ledger-app-*-SNAPSHOT.jar
+java -jar ledger-app/target/ledger-app-*-SNAPSHOT.jar &
+app=$!
+until curl -s -o /dev/null localhost:8080; do
+    kill -0 $app    # livness check
+    sleep 1
+done
+java -jar ledger-relay/target/ledger-relay-*-SNAPSHOT.jar
