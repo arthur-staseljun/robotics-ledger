@@ -22,23 +22,23 @@ public class TransferDeadLetterRecoverer implements ConsumerRecordRecoverer {
     public TransferDeadLetterRecoverer(AccountService accountService, KafkaTemplate<String, String> kafkaTemplate) {
         this.accountService = accountService;
         this.publisher = new DeadLetterPublishingRecoverer(kafkaTemplate,
-                (record, exception) -> new TopicPartition(DLQ_TOPIC, -1));
+                (message, exception) -> new TopicPartition(DLQ_TOPIC, -1));
     }
 
     @Override
-    public void accept(ConsumerRecord<?, ?> record, Exception exception) {
-        log.error("Transfer message {}-{}@{} goes to the DLQ: {}", record.topic(), record.partition(),
-                record.offset(), exception.toString());
-        freezeSourceAccount(record);
-        publisher.accept(record, exception);
+    public void accept(ConsumerRecord<?, ?> message, Exception exception) {
+        log.error("Transfer message {}-{}@{} goes to the DLQ: {}", message.topic(), message.partition(),
+                message.offset(), exception.toString());
+        freezeSourceAccount(message);
+        publisher.accept(message, exception);
     }
 
-    private void freezeSourceAccount(ConsumerRecord<?, ?> record) {
+    private void freezeSourceAccount(ConsumerRecord<?, ?> message) {
         try {
-            accountService.freeze(Long.parseLong(String.valueOf(record.key())));
+            accountService.freeze(Long.parseLong(String.valueOf(message.key())));
         } catch (NumberFormatException | LedgerServiceException ex) {
-            log.warn("The account of message {}-{}@{} was not frozen: {}", record.topic(), record.partition(),
-                    record.offset(), ex.toString());
+            log.warn("The account of message {}-{}@{} was not frozen: {}", message.topic(), message.partition(),
+                    message.offset(), ex.toString());
         }
     }
 }

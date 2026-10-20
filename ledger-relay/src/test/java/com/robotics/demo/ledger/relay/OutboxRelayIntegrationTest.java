@@ -93,8 +93,8 @@ class OutboxRelayIntegrationTest {
         return transferId;
     }
 
-    private static long transferIdOf(ConsumerRecord<String, String> record) {
-        return JSON.readTree(record.value()).get("transferId").asLong();
+    private static long transferIdOf(ConsumerRecord<String, String> message) {
+        return JSON.readTree(message.value()).get("transferId").asLong();
     }
 
     private List<ConsumerRecord<String, String>> consume(int expected,
@@ -114,9 +114,9 @@ class OutboxRelayIntegrationTest {
             consumer.seekToBeginning(partitions);
             long deadline = System.nanoTime() + CONSUME_TIMEOUT.toNanos();
             while (found.size() < expected && System.nanoTime() < deadline) {
-                consumer.poll(Duration.ofMillis(200)).forEach(record -> {
-                    if (wanted.test(record)) {
-                        found.add(record);
+                consumer.poll(Duration.ofMillis(200)).forEach(message -> {
+                    if (wanted.test(message)) {
+                        found.add(message);
                     }
                 });
             }
@@ -137,7 +137,7 @@ class OutboxRelayIntegrationTest {
         int sent = outboxRelay.relayOnce();
 
         assertThat(sent).isEqualTo(1);
-        List<ConsumerRecord<String, String>> records = consume(1, record -> transferIdOf(record) == transferId);
+        List<ConsumerRecord<String, String>> records = consume(1, message -> transferIdOf(message) == transferId);
         assertThat(records).hasSize(1);
         assertThat(records.getFirst().key()).isEqualTo(String.valueOf(from));
         assertThat(JSON.readTree(records.getFirst().value()).get("accountTo").asLong()).isEqualTo(to);
@@ -157,7 +157,7 @@ class OutboxRelayIntegrationTest {
         int sent = outboxRelay.relayOnce();
 
         assertThat(sent).isEqualTo(5);
-        List<ConsumerRecord<String, String>> records = consume(5, record -> record.key().equals(String.valueOf(from)));
+        List<ConsumerRecord<String, String>> records = consume(5, message -> message.key().equals(String.valueOf(from)));
         assertThat(records).hasSize(5);
         assertThat(records).extracting(ConsumerRecord::partition).containsOnly(records.getFirst().partition());
         List<Long> publishedOrder = records.stream()

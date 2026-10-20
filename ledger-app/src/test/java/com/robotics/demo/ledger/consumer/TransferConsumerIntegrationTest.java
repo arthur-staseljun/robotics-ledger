@@ -19,7 +19,14 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.QueryTimeoutException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
+import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.listener.ContainerProperties;
+import org.springframework.kafka.listener.KafkaMessageListenerContainer;
+import org.springframework.kafka.listener.MessageListener;
+import org.springframework.kafka.listener.MessageListenerContainer;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -29,9 +36,11 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Currency;
 import java.util.List;
 import java.util.Properties;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -72,6 +81,21 @@ class TransferConsumerIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Autowired
     private KafkaTemplate<String, String> kafkaTemplate;
+
+    @Autowired
+    private KafkaListenerEndpointRegistry listenerRegistry;
+
+    @Autowired
+    private ConsumerFactory<String, String> consumerFactory;
+
+    @Autowired
+    private TransferConsumer transferConsumer;
+
+    @Value("${spring.kafka.consumer.group-id}")
+    private String groupId;
+
+    @Value("${ledger.consumer.partitions}")
+    private int partitions;
 
     private static Money eur(String amount) {
         return Money.of(new BigDecimal(amount), EUR);
@@ -114,16 +138,16 @@ class TransferConsumerIntegrationTest extends AbstractPostgresIntegrationTest {
         properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         List<ConsumerRecord<String, String>> found = new ArrayList<>();
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(properties)) {
-            List<TopicPartition> partitions = consumer.partitionsFor(TransferDeadLetterRecoverer.DLQ_TOPIC).stream()
+            List<TopicPartition> dlqPartitions = consumer.partitionsFor(TransferDeadLetterRecoverer.DLQ_TOPIC).stream()
                     .map(info -> new TopicPartition(info.topic(), info.partition()))
                     .toList();
-            consumer.assign(partitions);
-            consumer.seekToBeginning(partitions);
+            consumer.assign(dlqPartitions);
+            consumer.seekToBeginning(dlqPartitions);
             long deadline = System.nanoTime() + SETTLE_TIMEOUT.toNanos();
             while (found.isEmpty() && System.nanoTime() < deadline) {
-                consumer.poll(Duration.ofMillis(200)).forEach(record -> {
-                    if (String.valueOf(accountFrom).equals(record.key())) {
-                        found.add(record);
+                consumer.poll(Duration.ofMillis(200)).forEach(message -> {
+                    if (String.valueOf(accountFrom).equals(message.key())) {
+                        found.add(message);
                     }
                 });
             }
@@ -216,5 +240,46 @@ class TransferConsumerIntegrationTest extends AbstractPostgresIntegrationTest {
         verify(transferService, atLeast(3)).process(transferId);
         assertThat(accountService.getExistingAccount(from).getStatus()).isEqualTo(Account.AccountStatus.ACTIVE);
         assertThat(balanceOf(from)).isEqualTo(9000);
+    }
+
+    @Test
+    void twoInstancesInOneGroupShareThePartitionsAndEveryTransferIsAppliedOnce() throws Exception {
+        ContainerProperties containerProperties = new ContainerProperties(TransferCreatedEvent.TOPIC);
+        containerProperties.setGroupId(groupId);
+        containerProperties.setMessageListener(
+                (MessageListener<String, String>) message -> transferConsumer.onTransferCreated(message.value()));
+        KafkaMessageListenerContainer<String, String> secondInstance =
+                new KafkaMessageListenerContainer<>(consumerFactory, containerProperties);
+        MessageListenerContainer firstInstance = listenerRegistry.getListenerContainers().iterator().next();
+
+        secondInstance.start();
+        try {
+            await().atMost(SETTLE_TIMEOUT).untilAsserted(() -> {
+                Set<TopicPartition> first = new HashSet<>(firstInstance.getAssignedPartitions());
+                Set<TopicPartition> second = new HashSet<>(secondInstance.getAssignedPartitions());
+                assertThat(first).isNotEmpty();
+                assertThat(second).isNotEmpty();
+                assertThat(first).doesNotContainAnyElementsOf(second);
+                assertThat(first.size() + second.size()).isEqualTo(partitions);
+            });
+
+            List<Long> sources = new ArrayList<>();
+            List<Long> transfers = new ArrayList<>();
+            Long to = fundedAccount("0.00");
+            for (int i = 0; i < 12; i++) {
+                Long from = fundedAccount("100.00");
+                sources.add(from);
+                transfers.add(pendingTransfer(from, to, "10.00"));
+            }
+            for (int i = 0; i < transfers.size(); i++) {
+                publishCreatedEvent(transfers.get(i), sources.get(i));
+            }
+
+            transfers.forEach(transferId -> awaitStatus(transferId, TransferStatus.SUCCESSFUL));
+            sources.forEach(from -> assertThat(balanceOf(from)).isEqualTo(9000));
+            assertThat(balanceOf(to)).isEqualTo(12000);
+        } finally {
+            secondInstance.stop();
+        }
     }
 }

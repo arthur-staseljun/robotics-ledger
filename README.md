@@ -16,6 +16,8 @@ Java 25 and Docker are required. PostgreSQL is the only persistence.
 ```
 The tests with the `container` group start PostgreSQL and Kafka with Testcontainers, so Docker must be running.
 
+More instances of the API and consumer can be started with `java -jar ledger-app/target/ledger-app-*-SNAPSHOT.jar --server.port=8081`. They share one consumer group, so Kafka splits the partitions between them.
+
 ## Modules
 
 - `ledger-app`: REST API, Kafka consumer that settles transfers, services, migrations.
