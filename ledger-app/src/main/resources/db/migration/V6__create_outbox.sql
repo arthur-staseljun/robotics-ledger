@@ -13,4 +13,4 @@ create table outbox (
     unique (transfer_id, event_type)
 );
 
-create index idx_outbox_to_be_sent on outbox (created_at, id) where sent_at is null;
+create index idx_outbox_to_be_sent on outbox (id) where sent_at is null;

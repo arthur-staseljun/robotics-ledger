@@ -16,7 +16,7 @@ public class OutboxStore {
         return jdbcClient.sql("""
                         select id, account_id, topic, payload::text as payload from outbox
                         where sent_at is null
-                        order by created_at, id
+                        order by id
                         limit :limit
                         """)
                 .param("limit", limit)

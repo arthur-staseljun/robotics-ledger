@@ -64,7 +64,7 @@ class OutboxStoreIntegrationTest {
     }
 
     @Test
-    void findsUnsentEventsOldestFirstRegardlessOfTheirIds() {
+    void findsUnsentEventsInIdOrderRegardlessOfTheirCreationTime() {
         unsentEvents(3);
         List<Long> ids = store.findUnsent(10).stream().map(Message::id).toList();
         for (int i = 0; i < ids.size(); i++) {
@@ -74,7 +74,7 @@ class OutboxStoreIntegrationTest {
 
         List<Message> found = store.findUnsent(10);
 
-        assertThat(found).extracting(Message::id).containsExactly(ids.reversed().toArray(Long[]::new));
+        assertThat(found).extracting(Message::id).isSorted().containsExactlyElementsOf(ids);
         assertThat(found).allSatisfy(message -> {
             assertThat(message.topic()).isEqualTo(KafkaConfig.TRANSFERS_TOPIC);
             assertThat(message.payload()).contains("transferId");

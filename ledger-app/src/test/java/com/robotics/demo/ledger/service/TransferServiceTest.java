@@ -107,7 +107,7 @@ class TransferServiceTest {
     void newKeyCreatesPendingTransferOutboxEventAndKeyRecord() {
         IdempotencyService.KeyClaim claim = new IdempotencyService.KeyClaim(keyEntity(new byte[0], null), true);
         when(idempotencyService.claim(any(), any(), any(String[].class))).thenReturn(claim);
-        when(accountService.getExistingAccount(1L)).thenReturn(account(1L, 10000));
+        when(accountService.getExistingAccountLocking(1L)).thenReturn(account(1L, 10000));
         when(accountService.getExistingAccount(2L)).thenReturn(account(2L, 0));
         givenTransfersAreStored();
 
@@ -123,7 +123,7 @@ class TransferServiceTest {
         assertThat(created.getValue().getTransferId()).isEqualTo(7L);
         assertThat(created.getValue().getStatus()).isEqualTo(TransferStatus.PENDING);
         verify(idempotencyService).linkTransfer(claim, 7L);
-        verify(accountService, never()).getExistingAccountLocking(any());
+        verify(accountService, never()).getExistingAccountLocking(2L);
         verify(transactionService, never()).recordTransfer(any(), any(), any(), any());
     }
 
@@ -179,7 +179,7 @@ class TransferServiceTest {
     void unknownAccountIsRejectedAndNoTransferIsStored() {
         when(idempotencyService.claim(any(), any(), any(String[].class)))
                 .thenReturn(new IdempotencyService.KeyClaim(keyEntity(new byte[0], null), true));
-        when(accountService.getExistingAccount(1L))
+        when(accountService.getExistingAccountLocking(1L))
                 .thenThrow(new LedgerServiceException(ErrorClassification.ACCOUNT_DOES_NOT_EXIST));
 
         assertThatThrownBy(() -> transferService.accept(CLIENT_ID, KEY, 1L, 2L, eur(100)))

@@ -50,7 +50,7 @@ public class TransferService {
             return new AcceptedTransfer(getTransfer(claim.key().getTransferId()), true);
         }
 
-        Account accountFrom = accountService.getExistingAccount(accountFromId);
+        Account accountFrom = accountService.getExistingAccountLocking(accountFromId);
         Account accountTo = accountService.getExistingAccount(accountToId);
         Transfer transfer = save(Transfer.pending(accountFrom, accountTo, amount));
         outboxService.saveCreated(transfer);
