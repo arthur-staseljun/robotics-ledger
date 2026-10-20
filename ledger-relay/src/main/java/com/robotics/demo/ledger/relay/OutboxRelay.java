@@ -48,7 +48,7 @@ public class OutboxRelay {
             kafkaTemplate.send(event.topic(), String.valueOf(event.accountId()), event.payload())
                     .get(properties.sendTimeout().toMillis(), TimeUnit.MILLISECONDS);
             return true;
-        } catch (ExecutionException | TimeoutException ex) {
+        } catch (ExecutionException | TimeoutException | RuntimeException ex) {
             log.warn("Outbox event {} was not published, it stays unsent: {}", event.id(), ex.toString());
             return false;
         } catch (InterruptedException ex) {

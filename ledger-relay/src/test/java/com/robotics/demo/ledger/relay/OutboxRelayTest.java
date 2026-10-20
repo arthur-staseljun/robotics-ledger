@@ -117,4 +117,21 @@ class OutboxRelayTest {
         verify(outboxStore, never()).markSent(3);
         verify(kafkaTemplate, never()).send("transfers", "10", third.payload());
     }
+
+    @Test
+    void anUnexpectedSendFailureStopsTheBatchAndKeepsTheMarksOfTheEventsAlreadySent() {
+        Message first = event(1, 10);
+        Message second = event(2, 10);
+        givenLeadership();
+        when(outboxStore.findUnsentForUpdate(anyInt())).thenReturn(List.of(first, second));
+        when(kafkaTemplate.send("transfers", "10", first.payload()))
+                .thenReturn(CompletableFuture.<SendResult<String, String>>completedFuture(null));
+        when(kafkaTemplate.send("transfers", "10", second.payload())).thenThrow(new IllegalStateException("producer closed"));
+
+        int sent = outboxRelay.relayOnce();
+
+        assertThat(sent).isEqualTo(1);
+        verify(outboxStore).markSent(1);
+        verify(outboxStore, never()).markSent(2);
+    }
 }
