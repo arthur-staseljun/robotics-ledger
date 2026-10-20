@@ -2,6 +2,8 @@ package com.robotics.demo.ledger;
 
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import com.robotics.demo.ledger.interceptor.ApiHeaders;
 import com.robotics.demo.ledger.model.domain.Account;
 import com.robotics.demo.ledger.model.domain.Money;
@@ -322,8 +324,12 @@ class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     private String transferBody(long from, long to, String amount) {
+        return transferBody(from, to, amount, "EUR");
+    }
+
+    private String transferBody(long from, long to, String amount, String currency) {
         return "{\"accountFrom\": \"" + from + "\", \"accountTo\": \"" + to + "\", \"amount\": \"" + amount
-                + "\", \"currency\": \"EUR\"}";
+                + "\", \"currency\": \"" + currency + "\"}";
     }
 
     @Test
@@ -420,6 +426,61 @@ class LedgerApiIntegrationTest extends AbstractPostgresIntegrationTest {
                         .content(transferBody(from, to, "6.00")))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.errorCode").value("idem-ex-02"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"accountFrom", "accountTo", "amount", "currency"})
+    void sameKeyWithAnyOtherFieldOfTheTransferReturns422(String changedField) throws Exception {
+        long from = fundedAccount("100.00");
+        long to = createAccount();
+        long other = createAccount();
+        String key = UUID.randomUUID().toString();
+        mockMvc.perform(post("/api/transfers")
+                        .header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID)
+                        .header(ApiHeaders.IDEMPOTENCY_KEY, key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(transferBody(from, to, "5.00", "EUR")))
+                .andExpect(status().isAccepted());
+
+        String changed = switch (changedField) {
+            case "accountFrom" -> transferBody(other, to, "5.00", "EUR");
+            case "accountTo" -> transferBody(from, other, "5.00", "EUR");
+            case "amount" -> transferBody(from, to, "5.01", "EUR");
+            default -> transferBody(from, to, "5.00", "USD");
+        };
+        mockMvc.perform(post("/api/transfers")
+                        .header(ApiHeaders.CLIENT_ID, TEST_CLIENT_ID)
+                        .header(ApiHeaders.IDEMPOTENCY_KEY, key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(changed))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.errorCode").value("idem-ex-02"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"10.005", "0.001", "abc", "NaN", "1E+30", "99999999999999999999", " "})
+    void transferWithAnAmountTheLedgerCannotHoldReturns400(String amount) throws Exception {
+        long from = fundedAccount("100.00");
+        long to = createAccount();
+
+        mockMvc.perform(authorizedPost("/api/transfers")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(transferBody(from, to, amount)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("tx-ex-00"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"0.01", "10.5", "1E+1", "7"})
+    void transferWithAValidAmountInAnyNotationIsAccepted(String amount) throws Exception {
+        long from = fundedAccount("100.00");
+        long to = createAccount();
+
+        mockMvc.perform(authorizedPost("/api/transfers")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(transferBody(from, to, amount)))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.status").value("PENDING"));
     }
 
     @Test

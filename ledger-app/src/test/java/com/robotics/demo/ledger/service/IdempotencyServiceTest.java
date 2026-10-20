@@ -12,17 +12,16 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import tools.jackson.databind.json.JsonMapper;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -35,104 +34,121 @@ class IdempotencyServiceTest {
     @Mock
     private IdempotencyKeyRepository idempotencyKeyRepository;
 
+    private final Map<IdempotencyKeyEntity.Key, IdempotencyKeyEntity> table = new HashMap<>();
+
     private IdempotencyService idempotencyService;
 
     @BeforeEach
     void setUp() {
+        when(idempotencyKeyRepository.insertIfAbsent(anyString(), any(UUID.class), any(byte[].class)))
+                .thenAnswer(invocation -> {
+                    IdempotencyKeyEntity.Key key = new IdempotencyKeyEntity.Key(
+                            invocation.getArgument(0), invocation.getArgument(1));
+                    if (table.containsKey(key)) {
+                        return 0;
+                    }
+                    Instant now = Instant.now();
+                    table.put(key, IdempotencyKeyEntity.builder()
+                            .clientId(key.clientId())
+                            .idempotencyKey(key.idempotencyKey())
+                            .requestHash(invocation.getArgument(2))
+                            .createdAt(now)
+                            .updatedAt(now)
+                            .build());
+                    return 1;
+                });
+        when(idempotencyKeyRepository.findById(any()))
+                .thenAnswer(invocation -> Optional.ofNullable(table.get(invocation.<IdempotencyKeyEntity.Key>getArgument(0))));
         idempotencyService = new IdempotencyService(idempotencyKeyRepository, JsonMapper.builder().build());
     }
 
-    private static byte[] hashOf(String... parts) {
-        try {
-            return MessageDigest.getInstance("SHA-256").digest(String.join("|", parts).getBytes(StandardCharsets.UTF_8));
-        } catch (NoSuchAlgorithmException ex) {
-            throw new IllegalStateException(ex);
-        }
+    private IdempotencyService.KeyClaim claim(String clientId, String... requestParts) {
+        return idempotencyService.claim(clientId, KEY, requestParts);
     }
 
-    private static IdempotencyKeyEntity stored(byte[] requestHash, String responseJson) {
-        Instant now = Instant.now();
-        return IdempotencyKeyEntity.builder()
-                .clientId(CLIENT_ID)
-                .idempotencyKey(KEY)
-                .requestHash(requestHash)
-                .responseJson(responseJson)
-                .createdAt(now)
-                .updatedAt(now)
-                .build();
-    }
-
-    @Test
-    void newKeyIsClaimedAsNew() {
-        when(idempotencyKeyRepository.insertIfAbsent(eq(CLIENT_ID), eq(KEY), any(byte[].class))).thenReturn(1);
-        when(idempotencyKeyRepository.findById(any())).thenReturn(Optional.of(stored(hashOf("customers"), null)));
-
-        IdempotencyService.KeyClaim claim = idempotencyService.claim(CLIENT_ID, KEY, "customers");
-
-        assertThat(claim.isNew()).isTrue();
-    }
-
-    @Test
-    void knownKeyWithTheSameRequestIsNotNew() {
-        when(idempotencyKeyRepository.insertIfAbsent(eq(CLIENT_ID), eq(KEY), any(byte[].class))).thenReturn(0);
-        when(idempotencyKeyRepository.findById(any())).thenReturn(Optional.of(stored(hashOf("customers"), null)));
-
-        IdempotencyService.KeyClaim claim = idempotencyService.claim(CLIENT_ID, KEY, "customers");
-
-        assertThat(claim.isNew()).isFalse();
-    }
-
-    @Test
-    void knownKeyWithAnotherRequestIsRejected() {
-        when(idempotencyKeyRepository.insertIfAbsent(eq(CLIENT_ID), eq(KEY), any(byte[].class))).thenReturn(0);
-        when(idempotencyKeyRepository.findById(any()))
-                .thenReturn(Optional.of(stored(hashOf("accounts", "1"), null)));
-
-        assertThatThrownBy(() -> idempotencyService.claim(CLIENT_ID, KEY, "customers"))
+    private void assertRejectedAsReuse(String clientId, String... requestParts) {
+        assertThatThrownBy(() -> claim(clientId, requestParts))
                 .isInstanceOf(LedgerServiceException.class)
                 .extracting("errorClassification")
                 .isEqualTo(ErrorClassification.IDEMPOTENCY_KEY_REUSED);
     }
 
     @Test
+    void aFirstRequestWithAKeyIsNew() {
+        assertThat(claim(CLIENT_ID, "customers").isNew()).isTrue();
+    }
+
+    @Test
+    void theSameRequestWithTheSameKeyIsNotNewAndSharesTheStoredKey() {
+        IdempotencyService.KeyClaim first = claim(CLIENT_ID, "accounts", "1");
+
+        IdempotencyService.KeyClaim second = claim(CLIENT_ID, "accounts", "1");
+
+        assertThat(second.isNew()).isFalse();
+        assertThat(second.key()).isSameAs(first.key());
+    }
+
+    @Test
+    void theSameKeyWithAnyOtherPartOfTheRequestIsRejected() {
+        claim(CLIENT_ID, "transfers", "1", "2", "2500", "EUR");
+
+        assertRejectedAsReuse(CLIENT_ID, "transfers", "9", "2", "2500", "EUR");
+        assertRejectedAsReuse(CLIENT_ID, "transfers", "1", "9", "2500", "EUR");
+        assertRejectedAsReuse(CLIENT_ID, "transfers", "1", "2", "2600", "EUR");
+        assertRejectedAsReuse(CLIENT_ID, "transfers", "1", "2", "2500", "USD");
+        assertRejectedAsReuse(CLIENT_ID, "accounts", "1", "2", "2500", "EUR");
+    }
+
+    @Test
+    void requestsThatOnlyDifferInWhereThePartsSplitAreStillDifferent() {
+        claim(CLIENT_ID, "a|b", "c");
+
+        assertRejectedAsReuse(CLIENT_ID, "a", "b|c");
+        assertRejectedAsReuse(CLIENT_ID, "a", "b", "c");
+        assertRejectedAsReuse(CLIENT_ID, "a|b|c");
+    }
+
+    @Test
+    void aMissingPartIsNotTheSameAsAnEmptyOne() {
+        claim(CLIENT_ID, "accounts", "1");
+
+        assertRejectedAsReuse(CLIENT_ID, "accounts", "1", "");
+        assertRejectedAsReuse(CLIENT_ID, "accounts");
+    }
+
+    @Test
+    void theSameKeyOfAnotherClientIsAnotherRequest() {
+        claim("client-a", "customers");
+
+        IdempotencyService.KeyClaim other = claim("client-b", "customers");
+
+        assertThat(other.isNew()).isTrue();
+    }
+
+    @Test
     void storeResponseKeepsTheResponseOfTheClaimedKey() {
-        IdempotencyKeyEntity key = stored(hashOf("customers"), null);
+        IdempotencyService.KeyClaim claim = claim(CLIENT_ID, "customers");
 
-        idempotencyService.storeResponse(new IdempotencyService.KeyClaim(key, true), new CustomerResponse(5L, CREATED_AT));
+        idempotencyService.storeResponse(claim, new CustomerResponse(5L, CREATED_AT));
 
-        assertThat(key.getResponseJson()).contains("\"customerId\":5");
+        assertThat(claim.key().getResponseJson()).contains("\"customerId\":5");
     }
 
     @Test
-    void storedResponseReadsTheResponseBackAsTheSameType() {
-        IdempotencyKeyEntity key = stored(hashOf("customers"), "{\"customerId\":5,\"createdAt\":\"" + CREATED_AT + "\"}");
+    void theStoredResponseComesBackAsTheSameResponseOnARepeatedRequest() {
+        idempotencyService.storeResponse(claim(CLIENT_ID, "customers"), new CustomerResponse(5L, CREATED_AT));
 
-        CustomerResponse response = idempotencyService.storedResponse(new IdempotencyService.KeyClaim(key, false), CustomerResponse.class);
+        IdempotencyService.KeyClaim repeated = claim(CLIENT_ID, "customers");
+        CustomerResponse response = idempotencyService.storedResponse(repeated, CustomerResponse.class);
 
-        assertThat(response.customerId()).isEqualTo(5L);
-        assertThat(response.createdAt()).isEqualTo(CREATED_AT);
+        assertThat(repeated.isNew()).isFalse();
+        assertThat(response).isEqualTo(new CustomerResponse(5L, CREATED_AT));
     }
 
     @Test
-    void theRequestIsIdentifiedByEveryPartOfIt() {
-        when(idempotencyKeyRepository.insertIfAbsent(eq(CLIENT_ID), eq(KEY), any(byte[].class))).thenReturn(0);
-        when(idempotencyKeyRepository.findById(any())).thenReturn(Optional.of(stored(hashOf("accounts", "1"), null)));
+    void linkTransferRecordsTheTransferOnTheKeyAndARepeatedRequestFindsIt() {
+        idempotencyService.linkTransfer(claim(CLIENT_ID, "transfers"), 7L);
 
-        assertThat(idempotencyService.claim(CLIENT_ID, KEY, "accounts", "1").isNew()).isFalse();
-        assertThatThrownBy(() -> idempotencyService.claim(CLIENT_ID, KEY, "accounts", "2"))
-                .isInstanceOf(LedgerServiceException.class);
-        assertThatThrownBy(() -> idempotencyService.claim(CLIENT_ID, KEY, "customers", "1"))
-                .isInstanceOf(LedgerServiceException.class);
-    }
-
-    @Test
-    void linkTransferRecordsTheTransferOnTheClaimedKey() {
-        IdempotencyKeyEntity key = stored(hashOf("transfers"), null);
-        Instant before = key.getUpdatedAt();
-
-        idempotencyService.linkTransfer(new IdempotencyService.KeyClaim(key, true), 7L);
-
-        assertThat(key.getTransferId()).isEqualTo(7L);
-        assertThat(key.getUpdatedAt()).isAfterOrEqualTo(before);
+        assertThat(claim(CLIENT_ID, "transfers").key().getTransferId()).isEqualTo(7L);
     }
 }

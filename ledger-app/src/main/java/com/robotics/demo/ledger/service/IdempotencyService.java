@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
 
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -53,8 +54,13 @@ public class IdempotencyService {
 
     private static byte[] hash(String... parts) {
         try {
-            return MessageDigest.getInstance("SHA-256")
-                    .digest(String.join("|", parts).getBytes(StandardCharsets.UTF_8));
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            for (String part : parts) {
+                byte[] bytes = part.getBytes(StandardCharsets.UTF_8);
+                digest.update(ByteBuffer.allocate(Integer.BYTES).putInt(bytes.length).array());
+                digest.update(bytes);
+            }
+            return digest.digest();
         } catch (NoSuchAlgorithmException ex) {
             throw new IllegalStateException(ex);
         }
